@@ -2,15 +2,34 @@ use core::fmt::Debug;
 use defmt::*;
 use embassy_executor::task;
 use embassy_rp::gpio::{Level, Output};
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::channel::Channel;
+use embassy_sync::mutex::Mutex;
+use embassy_time::{Duration, Instant, Ticker, Timer};
 
-use crate::{config_resources::StateMachineOutputResources, tasks::gpio_input::INPUTS};
+use crate::config::*;
+use crate::config_resources::{PowerButtonResources, StateMachineOutputResources};
+use crate::tasks::gpio_input::INPUTS;
+
+type PowerButtonType = Mutex<ThreadModeRawMutex, Option<Output<'static>>>;
+static POWER_BUTTON: PowerButtonType = Mutex::new(None);
+
+#[task]
+pub async fn power_button_click_task() {
+    let mut power_button = POWER_BUTTON.lock().await;
+    if let Some(pin_ref) = power_button.as_mut() {
+        pin_ref.set_low();
+        Timer::after(Duration::from_millis(500)).await;
+        pin_ref.set_high();
+    } else {
+        warn!("Power button not initialized");
+    }
+}
 
 /// GPIO outputs that are controlled by the state machine task.
 struct Outputs {
     pub ven: Output<'static>,
     pub pcie_sleep: Output<'static>,
-    pub pwr_btn_out: Output<'static>,
     pub dis_usb3: Output<'static>,
     pub dis_usb2: Output<'static>,
     pub dis_usb1: Output<'static>,
@@ -22,7 +41,6 @@ impl Outputs {
         Outputs {
             ven: Output::new(resources.ven, Level::Low),
             pcie_sleep: Output::new(resources.pcie_sleep, Level::Low),
-            pwr_btn_out: Output::new(resources.pwr_btn_out, Level::Low),
             dis_usb0: Output::new(resources.dis_usb0, Level::High),
             dis_usb1: Output::new(resources.dis_usb1, Level::High),
             dis_usb2: Output::new(resources.dis_usb2, Level::High),
@@ -83,6 +101,11 @@ impl ShutdownState {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OffState {}
+impl OffState {
+    pub fn new() -> Self {
+        OffState {}
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum StateMachine {
@@ -181,7 +204,7 @@ impl State for OffNoVinState {
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         info!("Running OffNoVinState");
         let inputs = INPUTS.lock().await;
-        if inputs.vin > 12345 {
+        if inputs.vin > VIN_OFF {
             // Transition to OffChargingState
             return Ok(StateMachine::OffCharging(OffChargingState {}));
         }
@@ -205,11 +228,11 @@ impl State for OffChargingState {
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         info!("Running OffChargingState");
         let inputs = INPUTS.lock().await;
-        if inputs.vscap > 23445 {
+        if inputs.vscap > VSCAP_POWER_ON {
             // Transition to BootingState
             return Ok(StateMachine::Booting(BootingState {}));
         }
-        if inputs.vin < 12345 {
+        if inputs.vin < VIN_OFF {
             // Transition to OffNoVinState
             return Ok(StateMachine::OffNoVin(OffNoVinState {}));
         }
@@ -224,9 +247,10 @@ impl State for OffChargingState {
 }
 
 impl State for BootingState {
-    async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
+    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
         info!("Entering BootingState");
         // Enable the 5V output
+        context.outputs.ven.set_high();
         // Set the LED blink pattern
         Ok(())
     }
@@ -238,7 +262,7 @@ impl State for BootingState {
             // Transition to OnState
             return Ok(StateMachine::On(OnState {}));
         }
-        if inputs.vin < 12345 {
+        if inputs.vin < VIN_OFF {
             // Transition to OffNoVinState
             return Ok(StateMachine::OffNoVin(OffNoVinState {}));
         }
@@ -263,7 +287,7 @@ impl State for OnState {
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         info!("Running OnState");
         let inputs = INPUTS.lock().await;
-        if inputs.vin < 12345 {
+        if inputs.vin < VIN_OFF {
             // Transition to DepletingState
             return Ok(StateMachine::Depleting(DepletingState::new()));
         }
@@ -297,7 +321,7 @@ impl State for DepletingState {
             return Ok(StateMachine::Shutdown(ShutdownState::new()));
         }
 
-        if inputs.vin > 12345 {
+        if inputs.vin > VIN_OFF {
             // Transition to OnState
             return Ok(StateMachine::On(OnState {}));
         }
@@ -317,6 +341,10 @@ impl State for DepletingState {
 impl State for ShutdownState {
     async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
         info!("Entering ShutdownState");
+        // Click the power button
+        embassy_executor::Spawner::for_current_executor().await
+            .spawn(power_button_click_task())
+            .unwrap();
         // Set the LED blink pattern
         Ok(())
     }
@@ -324,14 +352,12 @@ impl State for ShutdownState {
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         info!("Running ShutdownState");
         let inputs = INPUTS.lock().await;
-        if inputs.cm_on {
-            // Transition to BootingState
-            return Ok(StateMachine::Booting(BootingState {}));
+        let now = Instant::now();
+        if !inputs.cm_on || now.duration_since(self.entry_time) > Duration::from_millis(SHUTDOWN_WAIT_DURATION_MS as u64) {
+            // Transition to OffState
+            return Ok(StateMachine::Off(OffState::new()));
         }
-        if inputs.vin > 12345 {
-            // Transition to OffChargingState
-            return Ok(StateMachine::OffCharging(OffChargingState {}));
-        }
+
         Ok(StateMachine::Shutdown(*self))
     }
 
@@ -343,8 +369,9 @@ impl State for ShutdownState {
 }
 
 impl State for OffState {
-    async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
+    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
         info!("Entering OffState");
+        context.outputs.ven.set_low();
         // Set the LED blink pattern
         Ok(())
     }
@@ -352,7 +379,7 @@ impl State for OffState {
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         info!("Running OffState");
         let inputs = INPUTS.lock().await;
-        if inputs.vin > 12345 {
+        if inputs.vin > VIN_OFF {
             // Transition to OffChargingState
             return Ok(StateMachine::OffCharging(OffChargingState {}));
         }
@@ -367,11 +394,16 @@ impl State for OffState {
 }
 
 #[task]
-pub async fn state_machine_task(r: StateMachineOutputResources) {
+pub async fn state_machine_task(smor: StateMachineOutputResources, pbr: PowerButtonResources) {
     // Initialize resources
-    let outputs = Outputs::new(r);
-    let mut context = StateMachineContext::new(outputs);
+    let outputs = Outputs::new(smor);
+    let power_button = Output::new(pbr.pin, Level::High);
 
+    {
+        *(POWER_BUTTON.lock().await) = Some(power_button);
+    }
+
+    let mut context = StateMachineContext::new(outputs);
 
     let mut prev_state = StateMachine::Init(InitState {});
     let mut state = prev_state;

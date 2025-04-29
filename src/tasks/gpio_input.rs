@@ -8,16 +8,16 @@ use embassy_rp::{
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker};
 
-use crate::config_resources::{AnalogInputResources, DigitalInputResources};
+use crate::{config::{VIN_MAX, VSCAP_MAX}, config_resources::{AnalogInputResources, DigitalInputResources}};
 
 /// Input values that are read by the io_task and consumed by other tasks.
 #[derive(Clone, Format)]
 pub struct Inputs {
-    pub vin: u16,
-    pub vscap: u16,
-    pub iin: u16,
+    pub vin: f32,
+    pub vscap: f32,
+    pub iin: f32,
     pub cm_on: bool,
-    pub pcb_temp: u16,
+    pub pcb_temp: f32,
     pub led_pwr: bool,
     pub led_active: bool,
     pub pg_5v: bool,
@@ -26,11 +26,11 @@ pub struct Inputs {
 impl Inputs {
     const fn new() -> Self {
         Self {
-            vin: 0,
-            vscap: 0,
-            iin: 0,
+            vin: 0.,
+            vscap: 0.,
+            iin: 0.,
             cm_on: false,
-            pcb_temp: 0,
+            pcb_temp: 0.,
             led_pwr: false,
             led_active: false,
             pg_5v: false,
@@ -49,11 +49,11 @@ pub async fn digital_input_task(r: DigitalInputResources) {
     let pg_5v = Input::new(r.pg_5v, Pull::Down);
     let cm_on = Input::new(r.cm_on, Pull::Down);
 
-    let mut ticker = Ticker::every(Duration::from_millis(500));
+    let mut ticker = Ticker::every(Duration::from_millis(10));
 
     loop {
         ticker.next().await;
-        debug!("Reading digital inputs");
+        trace!("Reading digital inputs");
         let mut inputs = INPUTS.lock().await;
 
         // Read the input values
@@ -61,12 +61,16 @@ pub async fn digital_input_task(r: DigitalInputResources) {
         inputs.led_active = led_active.is_high();
         inputs.pg_5v = pg_5v.is_high();
         inputs.cm_on = cm_on.is_high();
-        debug!(
+        trace!(
             "LED_PWR: {}, LED_ACTIVE: {}, PG_5V: {}, CM_ON: {}",
             inputs.led_pwr, inputs.led_active, inputs.pg_5v, inputs.cm_on
         );
     }
 }
+
+const VIN_ADC_SCALE: f32 = VIN_MAX / 4096.0; // Scale factor for Vin readings
+const VSCAP_ADC_SCALE: f32 = VSCAP_MAX / 4096.0; // Scale factor for Vscap readings
+const IIN_ADC_SCALE: f32 = 3.3 / 4096.0;
 
 bind_interrupts!(struct Irqs {
     ADC_IRQ_FIFO => InterruptHandler;
@@ -79,24 +83,29 @@ pub async fn analog_input_task(r: AnalogInputResources) {
     let mut vins = Channel::new_pin(r.vin_s, Pull::None);
     let mut vscaps = Channel::new_pin(r.vscap_s, Pull::None);
     let mut iin = Channel::new_pin(r.iin, Pull::None);
+    let mut pcb_temp = Channel::new_temp_sensor(r.temp_sensor);
 
-    let mut ticker = Ticker::every(Duration::from_millis(1000));
+    let mut ticker = Ticker::every(Duration::from_millis(20));
 
     loop {
         ticker.next().await;
 
-        debug!("Reading analog inputs");
+        trace!("Reading analog inputs");
 
         let vin = adc.read(&mut vins).await;
         let vscap_value = adc.read(&mut vscaps).await;
         let iin_value = adc.read(&mut iin).await;
+        let pcb_temp_value = adc.read(&mut pcb_temp).await;
 
         let mut inputs = INPUTS.lock().await;
-        inputs.vin = vin.unwrap_or(0);
-        inputs.vscap = vscap_value.unwrap_or(0);
-        inputs.iin = iin_value.unwrap_or(0);
+        inputs.vin = (vin.unwrap_or(0) as f32) * VIN_ADC_SCALE;
+        inputs.vscap = (vscap_value.unwrap_or(0) as f32) * VSCAP_ADC_SCALE;
+        inputs.iin = (iin_value.unwrap_or(0) as f32) * IIN_ADC_SCALE;
+        // Convert to Kelvin
+        inputs.pcb_temp =
+            27.0 - (pcb_temp_value.unwrap_or(0) as f32 * 3.3 / 4096.0 - 0.706) / 0.001721 + 273.15;
 
-        debug!(
+        trace!(
             "VIN: {}, VSCAP: {}, IIN: {}",
             inputs.vin, inputs.vscap, inputs.iin
         );
