@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 
-extern crate alloc;
-
 use defmt::{debug, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -38,12 +36,12 @@ async fn main(spawner: Spawner) {
     //    .spawn(tasks::i2c_secondary::i2c_secondary_task(r.i2cs))
     //    .unwrap();
 
-    spawner
-        .spawn(tasks::state_machine::state_machine_task(
-            r.state_machine_outputs,
-            r.power_button,
-        ))
-        .unwrap();
+    //spawner
+    //    .spawn(tasks::state_machine::state_machine_task(
+    //        r.state_machine_outputs,
+    //        r.power_button,
+    //    ))
+    //    .unwrap();
 
     spawner
         .spawn(tasks::led_blinker::led_blinker_task(r.rgb_led))
