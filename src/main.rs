@@ -4,6 +4,7 @@
 extern crate alloc;
 
 use cortex_m_rt::entry;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel};
 use embedded_alloc::LlffHeap as Heap;
 
 #[global_allocator]
@@ -13,10 +14,12 @@ const HEAP_SIZE: usize = 65536; // 64kB
 use defmt::{debug, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use tasks::led_blinker::LEDBlinkerEvents;
 use {defmt_rtt as _, panic_probe as _};
 
 mod config;
 mod config_resources;
+mod led_patterns;
 mod tasks;
 
 use crate::config_resources::{
@@ -24,6 +27,9 @@ use crate::config_resources::{
     I2CSecondaryResources, PowerButtonResources, RGBLEDResources, StateMachineOutputResources,
     TestModeResources,
 };
+
+type LEDBlinkerChannelType = channel::Channel<CriticalSectionRawMutex, LEDBlinkerEvents, 8>;
+static LED_BLINKER_EVENT_CHANNEL: LEDBlinkerChannelType = channel::Channel::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -52,15 +58,19 @@ async fn main(spawner: Spawner) {
     //    .spawn(tasks::i2c_secondary::i2c_secondary_task(r.i2cs))
     //    .unwrap();
 
-    //spawner
-    //    .spawn(tasks::state_machine::state_machine_task(
-    //        r.state_machine_outputs,
-    //        r.power_button,
-    //    ))
-    //    .unwrap();
+    spawner
+        .spawn(tasks::state_machine::state_machine_task(
+            r.state_machine_outputs,
+            r.power_button,
+            &LED_BLINKER_EVENT_CHANNEL,
+        ))
+        .unwrap();
 
     spawner
-        .spawn(tasks::led_blinker::led_blinker_task(r.rgb_led))
+        .spawn(tasks::led_blinker::led_blinker_task(
+            r.rgb_led,
+            &LED_BLINKER_EVENT_CHANNEL,
+        ))
         .unwrap();
 
     //spawner

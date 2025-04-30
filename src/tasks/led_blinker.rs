@@ -1,18 +1,20 @@
 use core::fmt;
 
 use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 use embassy_executor::task;
 use embassy_rp::bind_interrupts;
-use alloc::vec::{Vec};
-use alloc::vec;
 
+use embassy_sync::channel::Receiver;
 use embassy_time::{Duration, Instant, Ticker};
 
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{Instance, InterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
-use smart_leds::RGB8;
+use smart_leds::{brightness, gamma, RGB8};
 
+use crate::LEDBlinkerChannelType;
 use crate::config_resources::RGBLEDResources;
 
 bind_interrupts!(struct Irqs {
@@ -20,6 +22,12 @@ bind_interrupts!(struct Irqs {
 });
 
 const NUM_LEDS: usize = 5;
+
+pub enum LEDBlinkerEvents {
+    SetPattern(LEDPattern),
+    SetBrightness(u8),
+    AddModifier(LEDPattern),
+}
 
 /// Input a value 0 to 255 to get a color value
 /// The colours are a transition r - g - b - back to r.
@@ -43,13 +51,19 @@ pub trait LEDPatternFragment {
 
 #[derive(Clone, Debug)]
 pub struct OneColor {
-    pub duration: u32,
+    pub duration_ms: u32,
     pub color: RGB8,
+}
+
+impl OneColor {
+    pub fn new(duration_ms: u32, color: RGB8) -> Self {
+        Self { duration_ms, color }
+    }
 }
 
 impl LEDPatternFragment for OneColor {
     fn duration_ms(&self) -> u32 {
-        self.duration
+        self.duration_ms
     }
 
     fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
@@ -61,12 +75,18 @@ impl LEDPatternFragment for OneColor {
 
 #[derive(Clone, Debug)]
 pub struct Off {
-    pub duration: u32,
+    pub duration_ms: u32,
+}
+
+impl Off {
+    pub fn new(duration: u32) -> Self {
+        Self { duration_ms: duration }
+    }
 }
 
 impl LEDPatternFragment for Off {
     fn duration_ms(&self) -> u32 {
-        self.duration
+        self.duration_ms
     }
 
     fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
@@ -78,25 +98,25 @@ impl LEDPatternFragment for Off {
 
 #[derive(Clone, Debug)]
 pub struct RoyalRainbow {
-    pub duration: u32,
+    pub duration_ms: u32,
     pub direction: bool,
 }
 impl RoyalRainbow {
     pub fn new(duration: u32, direction: bool) -> Self {
         Self {
-            duration,
+            duration_ms: duration,
             direction,
         }
     }
 }
 impl LEDPatternFragment for RoyalRainbow {
     fn duration_ms(&self) -> u32 {
-        self.duration
+        self.duration_ms
     }
 
     fn run(&self, t: u32, leds: &mut [RGB8; NUM_LEDS]) {
         let ti: i32 = t as i32;
-        let td = if self.direction {-ti} else {ti};
+        let td = if self.direction { -ti } else { ti };
         let j = td / 2;
         for (i, led) in leds.iter_mut().enumerate() {
             *led = wheel((((i * 256) as i32 / NUM_LEDS as i32 + j) & 255) as u8);
@@ -106,11 +126,19 @@ impl LEDPatternFragment for RoyalRainbow {
 
 #[derive(Clone, Debug)]
 pub struct Colors {
+    pub duration_ms: u32,
     pub colors: [RGB8; NUM_LEDS],
 }
+
+impl Colors {
+    pub fn new(duration_ms: u32, colors: [RGB8; NUM_LEDS]) -> Self {
+        Self { duration_ms, colors }
+    }
+}
+
 impl LEDPatternFragment for Colors {
     fn duration_ms(&self) -> u32 {
-        0
+        1000
     }
 
     fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
@@ -120,25 +148,25 @@ impl LEDPatternFragment for Colors {
     }
 }
 
-trait LEDPatternFragmentDebug: LEDPatternFragment + fmt::Debug {}
-impl<T: LEDPatternFragment + fmt::Debug> LEDPatternFragmentDebug for T {}
+pub trait LEDPatternFragmentDebug: LEDPatternFragment + fmt::Debug + Send {}
+impl<T: LEDPatternFragment + fmt::Debug + Send> LEDPatternFragmentDebug for T {}
 
-type FragmentVec = Vec<Box<dyn LEDPatternFragmentDebug>>;
+pub type FragmentVec = Vec<Box<dyn LEDPatternFragmentDebug>>;
 
-#[derive(Clone, Debug)]
-struct LEDPattern<'a> {
-    fragments: &'a FragmentVec,
+#[derive(Debug)]
+pub struct LEDPattern {
+    fragments: FragmentVec,
     current_fragment_idx: usize,
     current_fragment_start_ms: u64,
 }
-impl<'a> LEDPattern<'a> {
-    fn new(fragments: &'a FragmentVec) -> Self {
-            Self {
-                fragments,
-                current_fragment_idx: 0,
-                current_fragment_start_ms: 0,
-            }
+impl LEDPattern {
+    pub fn new(fragments: FragmentVec) -> Self {
+        Self {
+            fragments,
+            current_fragment_idx: 0,
+            current_fragment_start_ms: 0,
         }
+    }
 
     fn update(&mut self, data: &mut [RGB8; NUM_LEDS], oneshot: bool) -> bool {
         if self.current_fragment_start_ms == 0 {
@@ -173,23 +201,19 @@ impl<'a> LEDPattern<'a> {
     }
 }
 
-type ModifierVec<'a> = Vec<LEDPattern<'a>>;
+type ModifierVec = Vec<LEDPattern>;
 
 struct LEDBlinker<'d, P: Instance, const S: usize> {
     ws2812: PioWs2812<'d, P, S, NUM_LEDS>,
     data: [RGB8; NUM_LEDS],
     last_colors: [RGB8; NUM_LEDS],
-    pattern: LEDPattern<'d>,
-    modifiers: ModifierVec<'d>,
+    pattern: LEDPattern,
+    modifiers: ModifierVec,
     brightness: u8,
 }
 
 impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
-    fn new(
-        ws2812: PioWs2812<'d, P, S, NUM_LEDS>,
-        pattern: LEDPattern<'d>,
-        brightness: u8,
-    ) -> Self {
+    fn new(ws2812: PioWs2812<'d, P, S, NUM_LEDS>, pattern: LEDPattern, brightness: u8) -> Self {
         Self {
             ws2812,
             data: [RGB8::default(); NUM_LEDS],
@@ -200,12 +224,12 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
         }
     }
 
-    fn set_pattern(&mut self, pattern: &'d LEDPattern) {
-        self.pattern = pattern.clone();
+    fn set_pattern(&mut self, pattern: LEDPattern) {
+        self.pattern = pattern;
     }
 
-    fn add_modifier(&mut self, modifier: &'d LEDPattern) {
-        self.modifiers.push(modifier.clone());
+    fn add_modifier(&mut self, modifier: LEDPattern) {
+        self.modifiers.push(modifier);
     }
 
     async fn update(&mut self) {
@@ -213,23 +237,35 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
         self.pattern.update(&mut self.data, false);
         self.last_colors = self.data;
 
-        let mut mods: ModifierVec<'d> = Vec::new();
-        for modifier in self.modifiers.iter_mut() {
-            if modifier.update(&mut self.data, true) {
-                mods.push(modifier.clone());
+        let mut mods: ModifierVec = Vec::new();
+        for (i, modifier) in self.modifiers.iter_mut().enumerate() {
+            if !modifier.update(&mut self.data, true) {
+                mods.remove(i);
             }
         }
         self.modifiers = mods;
 
         // Apply brightness
-        for led in self.data.iter_mut() {
-            *led = RGB8::new(
-                (led.r as u16 * self.brightness as u16 / 255) as u8,
-                (led.g as u16 * self.brightness as u16 / 255) as u8,
-                (led.b as u16 * self.brightness as u16 / 255) as u8,
-            );
+
+        //for led in self.data.iter_mut() {
+        //    *led = RGB8::new(
+        //        (led.r as u16 * self.brightness as u16 / 255) as u8,
+        //        (led.g as u16 * self.brightness as u16 / 255) as u8,
+        //        (led.b as u16 * self.brightness as u16 / 255) as u8,
+        //    );
+        //}
+
+        let gamma_corrected = gamma(self.data.iter().cloned());
+        let brightness_corrected = brightness(gamma_corrected, self.brightness);
+        let corrected_data = brightness_corrected
+            .map(|color| RGB8::new(color.r, color.g, color.b));
+        // Write the data back into an RGB8 array
+        let mut output_data: [RGB8; NUM_LEDS] = [RGB8::default(); NUM_LEDS];
+        for (i, color) in corrected_data.enumerate() {
+            output_data[i] = color;
         }
-        self.ws2812.write(&self.data).await;
+
+        self.ws2812.write(&output_data).await;
     }
 
     fn set_brightness(&mut self, brightness: u8) {
@@ -242,7 +278,7 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
 }
 
 #[task]
-pub async fn led_blinker_task(r: RGBLEDResources) {
+pub async fn led_blinker_task(r: RGBLEDResources, channel: &'static LEDBlinkerChannelType) {
     let Pio {
         mut common, sm0, ..
     } = Pio::new(r.pio, Irqs);
@@ -253,24 +289,27 @@ pub async fn led_blinker_task(r: RGBLEDResources) {
     let program = PioWs2812Program::new(&mut common);
     let ws2812 = PioWs2812::new(&mut common, sm0, dma_ch0, rgb_led_pin, &program);
 
-    let fragments: FragmentVec = vec![
-        Box::new(RoyalRainbow::new(1280, true)),
-        Box::new(OneColor { duration: 1000, color: RGB8::new(255, 0, 0) }),
-        Box::new(OneColor { duration: 1000, color: RGB8::new(0, 255, 0) }),
-        Box::new(OneColor { duration: 1000, color: RGB8::new(0, 0, 255) }),
-        Box::new(OneColor { duration: 1000, color: RGB8::new(255, 255, 0) }),
-        Box::new(OneColor { duration: 1000, color: RGB8::new(255, 0, 255) }),
-        Box::new(OneColor { duration: 1000, color: RGB8::new(0, 255, 255) }),
-        Box::new(OneColor { duration: 1000, color: RGB8::new(255, 255, 255) }),
-        Box::new(Off { duration: 1000 }),
-    ];
-    let pattern = LEDPattern::new(&fragments);
+    let fragments: FragmentVec = vec![Box::new(Off { duration_ms: 1000 })];
+    let pattern = LEDPattern::new(fragments);
 
     let mut led_blinker = LEDBlinker::new(ws2812, pattern, 255);
 
     let mut ticker = Ticker::every(Duration::from_millis(10));
 
+    let receiver = channel.receiver();
     loop {
+        if !(receiver.is_empty()) {
+            let event = receiver.receive().await;
+
+            match event {
+                LEDBlinkerEvents::SetPattern(pattern) => led_blinker.set_pattern(pattern),
+                LEDBlinkerEvents::SetBrightness(brightness) => {
+                    led_blinker.set_brightness(brightness)
+                }
+                LEDBlinkerEvents::AddModifier(modifier) => led_blinker.add_modifier(modifier),
+            }
+        }
+
         ticker.next().await;
         led_blinker.update().await;
     }

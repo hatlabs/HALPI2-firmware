@@ -1,3 +1,5 @@
+use crate::led_patterns::get_state_pattern;
+use crate::tasks::led_blinker::LEDBlinkerEvents;
 use core::fmt::Debug;
 use defmt::*;
 use embassy_executor::task;
@@ -7,9 +9,9 @@ use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker, Timer};
 
-use crate::config::*;
 use crate::config_resources::{PowerButtonResources, StateMachineOutputResources};
 use crate::tasks::gpio_input::INPUTS;
+use crate::{LEDBlinkerChannelType, config::*};
 
 type PowerButtonType = Mutex<ThreadModeRawMutex, Option<Output<'static>>>;
 static POWER_BUTTON: PowerButtonType = Mutex::new(None);
@@ -51,11 +53,15 @@ impl Outputs {
 
 struct StateMachineContext {
     pub outputs: Outputs,
+    pub led_blinker_channel: &'static LEDBlinkerChannelType,
 }
 
 impl StateMachineContext {
-    pub fn new(outputs: Outputs) -> Self {
-        StateMachineContext { outputs }
+    pub fn new(outputs: Outputs, led_blinker_channel: &'static LEDBlinkerChannelType) -> Self {
+        StateMachineContext {
+            outputs,
+            led_blinker_channel,
+        }
     }
 }
 
@@ -169,6 +175,17 @@ where
     async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()>;
     async fn run(&mut self, context: &mut StateMachineContext) -> Result<StateMachine, ()>;
     async fn exit(&mut self, context: &mut StateMachineContext) -> Result<(), ()>;
+    async fn set_led_pattern(
+        &mut self,
+        context: &StateMachineContext,
+        state: &StateMachine,
+    ) -> Result<(), ()> {
+        context
+            .led_blinker_channel
+            .send(LEDBlinkerEvents::SetPattern(get_state_pattern(state)))
+            .await;
+        Ok(())
+    }
 }
 
 impl State for InitState {
@@ -198,6 +215,8 @@ impl State for OffNoVinState {
         // Set Ven low
         context.outputs.ven.set_low();
         // Set the LED blink pattern
+        self.set_led_pattern(context, &StateMachine::OffNoVin(*self))
+            .await?;
         Ok(())
     }
 
@@ -219,9 +238,11 @@ impl State for OffNoVinState {
 }
 
 impl State for OffChargingState {
-    async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
+    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
         info!("Entering OffChargingState");
         // Set the LED blink pattern
+        self.set_led_pattern(context, &StateMachine::OffCharging(*self))
+            .await?;
         Ok(())
     }
 
@@ -252,6 +273,8 @@ impl State for BootingState {
         // Enable the 5V output
         context.outputs.ven.set_high();
         // Set the LED blink pattern
+        self.set_led_pattern(context, &StateMachine::Booting(*self))
+            .await?;
         Ok(())
     }
 
@@ -280,7 +303,9 @@ impl State for BootingState {
 impl State for OnState {
     async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
         info!("Entering OnState");
-        // Set the LED blink pattern (Royal Rainbow)
+        // Set the LED blink pattern
+        self.set_led_pattern(_context, &StateMachine::On(*self))
+            .await?;
         Ok(())
     }
 
@@ -309,6 +334,8 @@ impl State for DepletingState {
         info!("Entering DepletingState");
         self.entry_time = Instant::now();
         // Set the LED blink pattern
+        self.set_led_pattern(_context, &StateMachine::Depleting(*self))
+            .await?;
         Ok(())
     }
 
@@ -342,10 +369,13 @@ impl State for ShutdownState {
     async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
         info!("Entering ShutdownState");
         // Click the power button
-        embassy_executor::Spawner::for_current_executor().await
+        embassy_executor::Spawner::for_current_executor()
+            .await
             .spawn(power_button_click_task())
             .unwrap();
         // Set the LED blink pattern
+        self.set_led_pattern(_context, &StateMachine::Shutdown(*self))
+            .await?;
         Ok(())
     }
 
@@ -353,7 +383,10 @@ impl State for ShutdownState {
         info!("Running ShutdownState");
         let inputs = INPUTS.lock().await;
         let now = Instant::now();
-        if !inputs.cm_on || now.duration_since(self.entry_time) > Duration::from_millis(SHUTDOWN_WAIT_DURATION_MS as u64) {
+        if !inputs.cm_on
+            || now.duration_since(self.entry_time)
+                > Duration::from_millis(SHUTDOWN_WAIT_DURATION_MS as u64)
+        {
             // Transition to OffState
             return Ok(StateMachine::Off(OffState::new()));
         }
@@ -373,6 +406,8 @@ impl State for OffState {
         info!("Entering OffState");
         context.outputs.ven.set_low();
         // Set the LED blink pattern
+        self.set_led_pattern(context, &StateMachine::Off(*self))
+            .await?;
         Ok(())
     }
 
@@ -394,7 +429,11 @@ impl State for OffState {
 }
 
 #[task]
-pub async fn state_machine_task(smor: StateMachineOutputResources, pbr: PowerButtonResources) {
+pub async fn state_machine_task(
+    smor: StateMachineOutputResources,
+    pbr: PowerButtonResources,
+    led_blinker_channel: &'static LEDBlinkerChannelType,
+) {
     // Initialize resources
     let outputs = Outputs::new(smor);
     let power_button = Output::new(pbr.pin, Level::High);
@@ -403,7 +442,7 @@ pub async fn state_machine_task(smor: StateMachineOutputResources, pbr: PowerBut
         *(POWER_BUTTON.lock().await) = Some(power_button);
     }
 
-    let mut context = StateMachineContext::new(outputs);
+    let mut context = StateMachineContext::new(outputs, led_blinker_channel);
 
     let mut prev_state = StateMachine::Init(InitState {});
     let mut state = prev_state;
