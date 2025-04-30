@@ -1,9 +1,9 @@
 use core::fmt;
 
-use defmt::debug;
 use embassy_executor::task;
 use embassy_rp::bind_interrupts;
-use heapless::Vec;
+use alloc::vec::{Vec};
+use alloc::vec;
 
 use embassy_time::{Duration, Instant, Ticker};
 
@@ -19,8 +19,6 @@ bind_interrupts!(struct Irqs {
 });
 
 const NUM_LEDS: usize = 5;
-const FRAGMENT_VEC_SIZE: usize = 30;
-const MODIFIER_VEC_SIZE: usize = 5;
 
 /// Input a value 0 to 255 to get a color value
 /// The colours are a transition r - g - b - back to r.
@@ -96,7 +94,7 @@ impl LEDPatternFragment for RoyalRainbow {
 
 #[derive(Clone, Debug)]
 pub struct Colors {
-    pub colors: Vec<RGB8, NUM_LEDS>,
+    pub colors: [RGB8; NUM_LEDS],
 }
 impl LEDPatternFragment for Colors {
     fn duration_ms(&self) -> u32 {
@@ -105,7 +103,7 @@ impl LEDPatternFragment for Colors {
 
     fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
         for (i, led) in leds.iter_mut().enumerate() {
-            *led = self.colors[i % self.colors.len()];
+            *led = self.colors[i % NUM_LEDS];
         }
     }
 }
@@ -113,7 +111,7 @@ impl LEDPatternFragment for Colors {
 trait LEDPatternFragmentDebug: LEDPatternFragment + fmt::Debug {}
 impl<T: LEDPatternFragment + fmt::Debug> LEDPatternFragmentDebug for T {}
 
-type FragmentVec = Vec<&'static dyn LEDPatternFragmentDebug, FRAGMENT_VEC_SIZE>;
+type FragmentVec = Vec<&'static dyn LEDPatternFragmentDebug>;
 
 #[derive(Clone, Debug)]
 struct LEDPattern {
@@ -163,11 +161,11 @@ impl LEDPattern {
     }
 }
 
-type ModifierVec = Vec<LEDPattern, MODIFIER_VEC_SIZE>;
+type ModifierVec = Vec<LEDPattern>;
 
 struct LEDBlinker<'d, P: Instance, const S: usize> {
     ws2812: PioWs2812<'d, P, S, NUM_LEDS>,
-    data: &'d mut [RGB8; NUM_LEDS],
+    data: [RGB8; NUM_LEDS],
     last_colors: [RGB8; NUM_LEDS],
     pattern: LEDPattern,
     modifiers: ModifierVec,
@@ -176,12 +174,11 @@ struct LEDBlinker<'d, P: Instance, const S: usize> {
 impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
     fn new(
         ws2812: PioWs2812<'d, P, S, NUM_LEDS>,
-        data: &'d mut [RGB8; NUM_LEDS],
         pattern: LEDPattern,
     ) -> Self {
         Self {
             ws2812,
-            data,
+            data: [RGB8::default(); NUM_LEDS],
             last_colors: [RGB8::default(); NUM_LEDS],
             pattern,
             modifiers: Vec::new(),
@@ -193,21 +190,23 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
     }
 
     fn add_modifier(&mut self, modifier: &LEDPattern) {
-        self.modifiers.push(modifier.clone()).unwrap();
+        self.modifiers.push(modifier.clone());
     }
 
     async fn update(&mut self) {
-        self.pattern.update(self.data, false);
+        self.data.copy_from_slice(&self.last_colors);
+        self.pattern.update(&mut self.data, false);
+        self.last_colors = self.data;
 
         let mut mods: ModifierVec = Vec::new();
         for modifier in self.modifiers.iter_mut() {
-            if modifier.update(self.data, true) {
-                mods.push(modifier.clone()).unwrap();
+            if modifier.update(&mut self.data, true) {
+                mods.push(modifier.clone());
             }
         }
         self.modifiers = mods;
 
-        self.ws2812.write(self.data).await;
+        self.ws2812.write(&self.data).await;
     }
 }
 
@@ -220,17 +219,54 @@ pub async fn led_blinker_task(r: RGBLEDResources) {
     let dma_ch0 = r.dma_ch;
     let rgb_led_pin = r.pin;
 
-    let mut data = [RGB8::default(); NUM_LEDS];
-
     let program = PioWs2812Program::new(&mut common);
     let ws2812 = PioWs2812::new(&mut common, sm0, dma_ch0, rgb_led_pin, &program);
 
-    let fragments: FragmentVec =
-        Vec::from_slice(&[&(RoyalRainbow { duration: 2560 }) as &dyn LEDPatternFragmentDebug])
-            .unwrap();
+    static ROYAL_RAINBOW: RoyalRainbow = RoyalRainbow { duration: 2560 };
+    static ONE_COLOR_RED: OneColor = OneColor {
+        duration: 1000,
+        color: RGB8::new(255, 0, 0),
+    };
+    static ONE_COLOR_GREEN: OneColor = OneColor {
+        duration: 1000,
+        color: RGB8::new(0, 255, 0),
+    };
+    static ONE_COLOR_BLUE: OneColor = OneColor {
+        duration: 1000,
+        color: RGB8::new(0, 0, 255),
+    };
+    static ONE_COLOR_YELLOW: OneColor = OneColor {
+        duration: 1000,
+        color: RGB8::new(255, 255, 0),
+    };
+    static ONE_COLOR_MAGENTA: OneColor = OneColor {
+        duration: 1000,
+        color: RGB8::new(255, 0, 255),
+    };
+    static ONE_COLOR_CYAN: OneColor = OneColor {
+        duration: 1000,
+        color: RGB8::new(0, 255, 255),
+    };
+    static ONE_COLOR_WHITE: OneColor = OneColor {
+        duration: 1000,
+        color: RGB8::new(255, 255, 255),
+    };
+    static OFF: Off = Off { duration: 1000 };
+
+    let fragments: FragmentVec = vec![
+        &ROYAL_RAINBOW,
+        &ONE_COLOR_RED,
+        &ONE_COLOR_GREEN,
+        &ONE_COLOR_BLUE,
+        &ONE_COLOR_YELLOW,
+        &ONE_COLOR_MAGENTA,
+        &ONE_COLOR_CYAN,
+        &ONE_COLOR_WHITE,
+        &OFF,
+    ];
     let pattern = LEDPattern::new(fragments);
 
-    let mut led_blinker = LEDBlinker::new(ws2812, &mut data, pattern);
+    let mut led_blinker = LEDBlinker::new(ws2812, pattern);
 
     let mut ticker = Ticker::every(Duration::from_millis(10));
 
