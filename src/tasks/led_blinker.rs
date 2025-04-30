@@ -1,5 +1,6 @@
 use core::fmt;
 
+use alloc::boxed::Box;
 use embassy_executor::task;
 use embassy_rp::bind_interrupts;
 use alloc::vec::{Vec};
@@ -111,22 +112,22 @@ impl LEDPatternFragment for Colors {
 trait LEDPatternFragmentDebug: LEDPatternFragment + fmt::Debug {}
 impl<T: LEDPatternFragment + fmt::Debug> LEDPatternFragmentDebug for T {}
 
-type FragmentVec = Vec<&'static dyn LEDPatternFragmentDebug>;
+type FragmentVec = Vec<Box<dyn LEDPatternFragmentDebug>>;
 
 #[derive(Clone, Debug)]
-struct LEDPattern {
-    fragments: FragmentVec,
+struct LEDPattern<'a> {
+    fragments: &'a FragmentVec,
     current_fragment_idx: usize,
     current_fragment_start_ms: u64,
 }
-impl LEDPattern {
-    fn new(fragments: FragmentVec) -> Self {
-        Self {
-            fragments,
-            current_fragment_idx: 0,
-            current_fragment_start_ms: 0,
+impl<'a> LEDPattern<'a> {
+    fn new(fragments: &'a FragmentVec) -> Self {
+            Self {
+                fragments,
+                current_fragment_idx: 0,
+                current_fragment_start_ms: 0,
+            }
         }
-    }
 
     fn update(&mut self, data: &mut [RGB8; NUM_LEDS], oneshot: bool) -> bool {
         if self.current_fragment_start_ms == 0 {
@@ -161,20 +162,20 @@ impl LEDPattern {
     }
 }
 
-type ModifierVec = Vec<LEDPattern>;
+type ModifierVec<'a> = Vec<LEDPattern<'a>>;
 
 struct LEDBlinker<'d, P: Instance, const S: usize> {
     ws2812: PioWs2812<'d, P, S, NUM_LEDS>,
     data: [RGB8; NUM_LEDS],
     last_colors: [RGB8; NUM_LEDS],
-    pattern: LEDPattern,
-    modifiers: ModifierVec,
+    pattern: LEDPattern<'d>,
+    modifiers: ModifierVec<'d>,
 }
 
 impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
     fn new(
         ws2812: PioWs2812<'d, P, S, NUM_LEDS>,
-        pattern: LEDPattern,
+        pattern: LEDPattern<'d>,
     ) -> Self {
         Self {
             ws2812,
@@ -185,11 +186,11 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
         }
     }
 
-    fn set_pattern(&mut self, pattern: &LEDPattern) {
+    fn set_pattern(&mut self, pattern: &'d LEDPattern) {
         self.pattern = pattern.clone();
     }
 
-    fn add_modifier(&mut self, modifier: &LEDPattern) {
+    fn add_modifier(&mut self, modifier: &'d LEDPattern) {
         self.modifiers.push(modifier.clone());
     }
 
@@ -198,7 +199,7 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
         self.pattern.update(&mut self.data, false);
         self.last_colors = self.data;
 
-        let mut mods: ModifierVec = Vec::new();
+        let mut mods: ModifierVec<'d> = Vec::new();
         for modifier in self.modifiers.iter_mut() {
             if modifier.update(&mut self.data, true) {
                 mods.push(modifier.clone());
@@ -222,49 +223,18 @@ pub async fn led_blinker_task(r: RGBLEDResources) {
     let program = PioWs2812Program::new(&mut common);
     let ws2812 = PioWs2812::new(&mut common, sm0, dma_ch0, rgb_led_pin, &program);
 
-    static ROYAL_RAINBOW: RoyalRainbow = RoyalRainbow { duration: 2560 };
-    static ONE_COLOR_RED: OneColor = OneColor {
-        duration: 1000,
-        color: RGB8::new(255, 0, 0),
-    };
-    static ONE_COLOR_GREEN: OneColor = OneColor {
-        duration: 1000,
-        color: RGB8::new(0, 255, 0),
-    };
-    static ONE_COLOR_BLUE: OneColor = OneColor {
-        duration: 1000,
-        color: RGB8::new(0, 0, 255),
-    };
-    static ONE_COLOR_YELLOW: OneColor = OneColor {
-        duration: 1000,
-        color: RGB8::new(255, 255, 0),
-    };
-    static ONE_COLOR_MAGENTA: OneColor = OneColor {
-        duration: 1000,
-        color: RGB8::new(255, 0, 255),
-    };
-    static ONE_COLOR_CYAN: OneColor = OneColor {
-        duration: 1000,
-        color: RGB8::new(0, 255, 255),
-    };
-    static ONE_COLOR_WHITE: OneColor = OneColor {
-        duration: 1000,
-        color: RGB8::new(255, 255, 255),
-    };
-    static OFF: Off = Off { duration: 1000 };
-
     let fragments: FragmentVec = vec![
-        &ROYAL_RAINBOW,
-        &ONE_COLOR_RED,
-        &ONE_COLOR_GREEN,
-        &ONE_COLOR_BLUE,
-        &ONE_COLOR_YELLOW,
-        &ONE_COLOR_MAGENTA,
-        &ONE_COLOR_CYAN,
-        &ONE_COLOR_WHITE,
-        &OFF,
+        Box::new(RoyalRainbow { duration: 2560 }),
+        Box::new(OneColor { duration: 1000, color: RGB8::new(255, 0, 0) }),
+        Box::new(OneColor { duration: 1000, color: RGB8::new(0, 255, 0) }),
+        Box::new(OneColor { duration: 1000, color: RGB8::new(0, 0, 255) }),
+        Box::new(OneColor { duration: 1000, color: RGB8::new(255, 255, 0) }),
+        Box::new(OneColor { duration: 1000, color: RGB8::new(255, 0, 255) }),
+        Box::new(OneColor { duration: 1000, color: RGB8::new(0, 255, 255) }),
+        Box::new(OneColor { duration: 1000, color: RGB8::new(255, 255, 255) }),
+        Box::new(Off { duration: 1000 }),
     ];
-    let pattern = LEDPattern::new(fragments);
+    let pattern = LEDPattern::new(&fragments);
 
     let mut led_blinker = LEDBlinker::new(ws2812, pattern);
 
