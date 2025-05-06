@@ -46,7 +46,7 @@ pub async fn digital_input_task(r: DigitalInputResources) {
     // Initialize the peripherals and GPIO pins
     let led_pwr = Input::new(r.led_pwr, Pull::Down);
     let led_active = Input::new(r.led_active, Pull::Down);
-    let pg_5v = Input::new(r.pg_5v, Pull::Down);
+    let pg_5v = Input::new(r.pg_5v, Pull::Up);
     let cm_on = Input::new(r.cm_on, Pull::Down);
 
     let mut ticker = Ticker::every(Duration::from_millis(10));
