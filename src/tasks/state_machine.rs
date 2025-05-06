@@ -214,6 +214,11 @@ impl State for OffNoVinState {
         // Initialize state
         // Set Ven low
         context.outputs.ven.set_low();
+        context.outputs.pcie_sleep.set_high();
+        context.outputs.dis_usb0.set_high();
+        context.outputs.dis_usb1.set_high();
+        context.outputs.dis_usb2.set_high();
+        context.outputs.dis_usb3.set_high();
         // Set the LED blink pattern
         self.set_led_pattern(context, &StateMachine::OffNoVin(*self))
             .await?;
@@ -272,6 +277,11 @@ impl State for BootingState {
         info!("Entering BootingState");
         // Enable the 5V output
         context.outputs.ven.set_high();
+        context.outputs.pcie_sleep.set_low();
+        context.outputs.dis_usb0.set_low();
+        context.outputs.dis_usb1.set_low();
+        context.outputs.dis_usb2.set_low();
+        context.outputs.dis_usb3.set_low();
         // Set the LED blink pattern
         self.set_led_pattern(context, &StateMachine::Booting(*self))
             .await?;
@@ -405,6 +415,11 @@ impl State for OffState {
     async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
         info!("Entering OffState");
         context.outputs.ven.set_low();
+        context.outputs.pcie_sleep.set_high();
+        context.outputs.dis_usb0.set_high();
+        context.outputs.dis_usb1.set_high();
+        context.outputs.dis_usb2.set_high();
+        context.outputs.dis_usb3.set_high();
         // Set the LED blink pattern
         self.set_led_pattern(context, &StateMachine::Off(*self))
             .await?;
