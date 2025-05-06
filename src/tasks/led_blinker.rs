@@ -17,10 +17,6 @@ use smart_leds::{brightness, gamma, RGB8};
 use crate::LEDBlinkerChannelType;
 use crate::config_resources::RGBLEDResources;
 
-bind_interrupts!(struct Irqs {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
-});
-
 const NUM_LEDS: usize = 5;
 
 pub enum LEDBlinkerEvents {
@@ -282,6 +278,10 @@ pub async fn led_blinker_task(r: RGBLEDResources, channel: &'static LEDBlinkerCh
     let Pio {
         mut common, sm0, ..
     } = Pio::new(r.pio, Irqs);
+
+    bind_interrupts!(struct Irqs {
+        PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    });
 
     let dma_ch0 = r.dma_ch;
     let rgb_led_pin = r.pin;
