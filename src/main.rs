@@ -14,7 +14,7 @@ const HEAP_SIZE: usize = 65536; // 64kB
 use defmt::{debug, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use tasks::led_blinker::LEDBlinkerEvents;
+use tasks::{led_blinker::LEDBlinkerEvents, power_button::PowerButtonEvents};
 use {defmt_rtt as _, panic_probe as _};
 
 mod config;
@@ -24,12 +24,15 @@ mod tasks;
 
 use crate::config_resources::{
     AnalogInputResources, AssignedResources, DigitalInputResources, I2CPeripheralsResources,
-    I2CSecondaryResources, PowerButtonResources, RGBLEDResources, StateMachineOutputResources,
-    TestModeResources,
+    I2CSecondaryResources, PowerButtonInputResources, PowerButtonResources, RGBLEDResources,
+    StateMachineOutputResources, TestModeResources, UserButtonInputResources,
 };
 
 type LEDBlinkerChannelType = channel::Channel<CriticalSectionRawMutex, LEDBlinkerEvents, 8>;
 static LED_BLINKER_EVENT_CHANNEL: LEDBlinkerChannelType = channel::Channel::new();
+
+type PowerButtonChannelType = channel::Channel<CriticalSectionRawMutex, PowerButtonEvents, 8>;
+static POWER_BUTTON_EVENT_CHANNEL: PowerButtonChannelType = channel::Channel::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -54,6 +57,24 @@ async fn main(spawner: Spawner) {
         .spawn(tasks::gpio_input::analog_input_task(r.analog_inputs))
         .unwrap();
 
+    spawner
+        .spawn(tasks::gpio_input::power_button_input_task(
+            r.power_button_input,
+            &POWER_BUTTON_EVENT_CHANNEL,
+        ))
+        .unwrap();
+
+    spawner
+        .spawn(tasks::gpio_input::user_button_input_task(
+            r.user_button_input
+        ))
+        .unwrap();
+
+    spawner.spawn(tasks::power_button::power_button_output_task(
+        r.power_button,
+        &POWER_BUTTON_EVENT_CHANNEL,
+    )).unwrap();
+
     //spawner
     //    .spawn(tasks::i2c_secondary::i2c_secondary_task(r.i2cs))
     //    .unwrap();
@@ -61,7 +82,7 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(tasks::state_machine::state_machine_task(
             r.state_machine_outputs,
-            r.power_button,
+            &POWER_BUTTON_EVENT_CHANNEL,
             &LED_BLINKER_EVENT_CHANNEL,
         ))
         .unwrap();
@@ -73,9 +94,9 @@ async fn main(spawner: Spawner) {
         ))
         .unwrap();
 
-    //spawner
-    //    .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
-    //    .unwrap();
+    spawner
+        .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
+        .unwrap();
 
     // Main task can handle other initialization or remain idle
     loop {
@@ -83,10 +104,11 @@ async fn main(spawner: Spawner) {
 
         let inputs = tasks::gpio_input::INPUTS.lock().await;
         debug!(
-            "vin: {:?} | vscap: {:?} | iin: {:?} | pcb_temp: {:?} | cm_on: {:?} | led_pwr: {:?} | led_active: {:?} | pg_5v: {:?} ",
+            "vin: {:?} | vscap: {:?} | iin: {:?} | mcu_temp: {:?} | pcb_temp: {:?} | cm_on: {:?} | led_pwr: {:?} | led_active: {:?} | pg_5v: {:?} ",
             inputs.vin,
             inputs.vscap,
             inputs.iin,
+            inputs.mcu_temp,
             inputs.pcb_temp,
             inputs.cm_on,
             inputs.led_pwr,

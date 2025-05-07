@@ -1,32 +1,16 @@
 use crate::led_patterns::get_state_pattern;
 use crate::tasks::led_blinker::LEDBlinkerEvents;
+use crate::tasks::power_button::PowerButtonEvents;
 use core::fmt::Debug;
 use defmt::*;
 use embassy_executor::task;
 use embassy_rp::gpio::{Level, Output};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::channel::Channel;
-use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Ticker, Timer};
+use embassy_time::{Duration, Instant, Ticker};
 
-use crate::config_resources::{PowerButtonResources, StateMachineOutputResources};
+use crate::config_resources::StateMachineOutputResources;
 use crate::tasks::gpio_input::INPUTS;
-use crate::{LEDBlinkerChannelType, config::*};
+use crate::{LEDBlinkerChannelType, PowerButtonChannelType, config::*};
 
-type PowerButtonType = Mutex<ThreadModeRawMutex, Option<Output<'static>>>;
-static POWER_BUTTON: PowerButtonType = Mutex::new(None);
-
-#[task]
-pub async fn power_button_click_task() {
-    let mut power_button = POWER_BUTTON.lock().await;
-    if let Some(pin_ref) = power_button.as_mut() {
-        pin_ref.set_low();
-        Timer::after(Duration::from_millis(500)).await;
-        pin_ref.set_high();
-    } else {
-        warn!("Power button not initialized");
-    }
-}
 
 /// GPIO outputs that are controlled by the state machine task.
 struct Outputs {
@@ -53,13 +37,19 @@ impl Outputs {
 
 struct StateMachineContext {
     pub outputs: Outputs,
+    pub power_button_channel: &'static PowerButtonChannelType,
     pub led_blinker_channel: &'static LEDBlinkerChannelType,
 }
 
 impl StateMachineContext {
-    pub fn new(outputs: Outputs, led_blinker_channel: &'static LEDBlinkerChannelType) -> Self {
+    pub fn new(
+        outputs: Outputs,
+        power_button_channel: &'static PowerButtonChannelType,
+        led_blinker_channel: &'static LEDBlinkerChannelType,
+    ) -> Self {
         StateMachineContext {
             outputs,
+            power_button_channel,
             led_blinker_channel,
         }
     }
@@ -196,7 +186,6 @@ impl State for InitState {
     }
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        info!("Running InitState");
         // Propagate to next state immediately
         Ok(StateMachine::OffNoVin(OffNoVinState {}))
     }
@@ -226,7 +215,6 @@ impl State for OffNoVinState {
     }
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        info!("Running OffNoVinState");
         let inputs = INPUTS.lock().await;
         if inputs.vin > VIN_OFF {
             // Transition to OffChargingState
@@ -252,7 +240,6 @@ impl State for OffChargingState {
     }
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        info!("Running OffChargingState");
         let inputs = INPUTS.lock().await;
         if inputs.vscap > VSCAP_POWER_ON {
             // Transition to BootingState
@@ -289,7 +276,6 @@ impl State for BootingState {
     }
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        info!("Running BootingState");
         let inputs = INPUTS.lock().await;
         if inputs.cm_on {
             // Transition to OnState
@@ -320,7 +306,6 @@ impl State for OnState {
     }
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        info!("Running OnState");
         let inputs = INPUTS.lock().await;
         if inputs.vin < VIN_OFF {
             // Transition to DepletingState
@@ -350,7 +335,6 @@ impl State for DepletingState {
     }
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        info!("Running DepletingState");
         let inputs = INPUTS.lock().await;
         let now = Instant::now();
         if now.duration_since(self.entry_time) > Duration::from_secs(5) {
@@ -376,21 +360,20 @@ impl State for DepletingState {
 }
 
 impl State for ShutdownState {
-    async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
+    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
         info!("Entering ShutdownState");
-        // Click the power button
-        embassy_executor::Spawner::for_current_executor()
-            .await
-            .spawn(power_button_click_task())
-            .unwrap();
+        // Double-click the power button
+        context
+            .power_button_channel
+            .send(PowerButtonEvents::DoubleClick)
+            .await;
         // Set the LED blink pattern
-        self.set_led_pattern(_context, &StateMachine::Shutdown(*self))
+        self.set_led_pattern(context, &StateMachine::Shutdown(*self))
             .await?;
         Ok(())
     }
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        info!("Running ShutdownState");
         let inputs = INPUTS.lock().await;
         let now = Instant::now();
         if !inputs.cm_on
@@ -427,7 +410,6 @@ impl State for OffState {
     }
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        info!("Running OffState");
         let inputs = INPUTS.lock().await;
         if inputs.vin > VIN_OFF {
             // Transition to OffChargingState
@@ -446,18 +428,13 @@ impl State for OffState {
 #[task]
 pub async fn state_machine_task(
     smor: StateMachineOutputResources,
-    pbr: PowerButtonResources,
+    power_button_channel: &'static PowerButtonChannelType,
     led_blinker_channel: &'static LEDBlinkerChannelType,
 ) {
     // Initialize resources
     let outputs = Outputs::new(smor);
-    let power_button = Output::new(pbr.pin, Level::High);
 
-    {
-        *(POWER_BUTTON.lock().await) = Some(power_button);
-    }
-
-    let mut context = StateMachineContext::new(outputs, led_blinker_channel);
+    let mut context = StateMachineContext::new(outputs, power_button_channel, led_blinker_channel);
 
     let mut prev_state = StateMachine::Init(InitState {});
     let mut state = prev_state;

@@ -34,66 +34,16 @@
 //| 28     | Iin         | Analog: Input current level.                                   |
 //| 29     | GPIO29_ADC3 | Analog: ADC channel 3 input. Unused.                           |
 
-use embassy_rp::peripherals;
 use assign_resources::assign_resources;
+use embassy_rp::peripherals;
 
 // Version 0.2.0 pin assignments
-
-// assign_resources! {
-//   /// GPIO pins for the controller
-//   rgb_led: RGBLEDResources {
-//     dma_ch: DMA_CH0,
-//     pin: PIN_0,
-//     pio: PIO0,
-//   },
-//   i2cs: I2CSecondaryResources {
-//     sda: PIN_12,
-//     scl: PIN_13,
-//   },
-//   i2cm: I2CPeripheralsResources {
-//     sda: PIN_20,
-//     scl: PIN_21,
-//   },
-//   digital_inputs: DigitalInputResources {
-//     pwr_btn_in: PIN_2,
-//     user_btn: PIN_3,
-//     gpio05: PIN_5,
-//     gpio06: PIN_6,
-//     gpio07: PIN_7,
-//     gpio08: PIN_8,
-//     led_pwr: PIN_10,
-//     led_active: PIN_11,
-//     cm_on: PIN_15,
-//     pg_5v: PIN_18,
-//   },
-//   analog_inputs: AnalogInputResources {
-//     adc: ADC,
-//     vin_s: PIN_26,
-//     vscap_s: PIN_27,
-//     iin: PIN_28,
-//     gpio29_adc3: PIN_29,
-//   },
-//   state_machine_outputs: StateMachineOutputResources {
-//     pcie_sleep: PIN_4,
-//     pwr_btn_out: PIN_9,
-//     ven: PIN_19,
-//     dis_usb3: PIN_22,
-//     dis_usb2: PIN_23,
-//     dis_usb1: PIN_24,
-//     dis_usb0: PIN_25,
-//   },
-//   test_mode: TestModeResources {
-//     pin: PIN_16,
-//   },
-// }
-
-// Version 0.1.0 pin assignments
 
 assign_resources! {
   /// GPIO pins for the controller
   rgb_led: RGBLEDResources {
     dma_ch: DMA_CH0,
-    pin: PIN_4,
+    pin: PIN_0,
     pio: PIO0,
   },
   i2cs: I2CSecondaryResources {
@@ -101,20 +51,25 @@ assign_resources! {
     scl: PIN_13,
   },
   i2cm: I2CPeripheralsResources {
-    sda: PIN_10,
-    scl: PIN_11,
+    sda: PIN_20,
+    scl: PIN_21,
+    i2c: I2C0,
   },
   digital_inputs: DigitalInputResources {
-    pwr_btn_in: PIN_24,
-    user_btn: PIN_23,
     gpio05: PIN_5,
     gpio06: PIN_6,
-    gpio07: PIN_25,
+    gpio07: PIN_7,
     gpio08: PIN_8,
-    led_pwr: PIN_18,
-    led_active: PIN_19,
+    led_pwr: PIN_10,
+    led_active: PIN_11,
     cm_on: PIN_15,
-    pg_5v: PIN_7,
+    pg_5v: PIN_18,
+  },
+  power_button_input: PowerButtonInputResources {
+    pin: PIN_2,
+  },
+  user_button_input: UserButtonInputResources {
+    pin: PIN_3,
   },
   analog_inputs: AnalogInputResources {
     adc: ADC,
@@ -125,17 +80,70 @@ assign_resources! {
     temp_sensor: ADC_TEMP_SENSOR,
   },
   state_machine_outputs: StateMachineOutputResources {
-    pcie_sleep: PIN_21,
-    ven: PIN_9,
-    dis_usb3: PIN_3,
-    dis_usb2: PIN_2,
-    dis_usb1: PIN_1,
-    dis_usb0: PIN_0,
+    pcie_sleep: PIN_4,
+    ven: PIN_19,
+    dis_usb3: PIN_22,
+    dis_usb2: PIN_23,
+    dis_usb1: PIN_24,
+    dis_usb0: PIN_25,
   },
   power_button: PowerButtonResources {
-    pin: PIN_20,
+    pin: PIN_9,
   },
   test_mode: TestModeResources {
     pin: PIN_16,
   },
 }
+
+// Version 0.1.0 pin assignments
+
+// assign_resources! {
+//   /// GPIO pins for the controller
+//   rgb_led: RGBLEDResources {
+//     dma_ch: DMA_CH0,
+//     pin: PIN_4,
+//     pio: PIO0,
+//   },
+//   i2cs: I2CSecondaryResources {
+//     sda: PIN_12,
+//     scl: PIN_13,
+//   },
+//   i2cm: I2CPeripheralsResources {
+//     sda: PIN_10,
+//     scl: PIN_11,
+//   },
+//   digital_inputs: DigitalInputResources {
+//     pwr_btn_in: PIN_24,
+//     user_btn: PIN_23,
+//     gpio05: PIN_5,
+//     gpio06: PIN_6,
+//     gpio07: PIN_25,
+//     gpio08: PIN_8,
+//     led_pwr: PIN_18,
+//     led_active: PIN_19,
+//     cm_on: PIN_15,
+//     pg_5v: PIN_7,
+//   },
+//   analog_inputs: AnalogInputResources {
+//     adc: ADC,
+//     vin_s: PIN_26,
+//     vscap_s: PIN_27,
+//     iin: PIN_28,
+//     gpio29_adc3: PIN_29,
+//     temp_sensor: ADC_TEMP_SENSOR,
+//   },
+//   state_machine_outputs: StateMachineOutputResources {
+//     pcie_sleep: PIN_21,
+//     ven: PIN_9,
+//     dis_usb3: PIN_3,
+//     dis_usb2: PIN_2,
+//     dis_usb1: PIN_1,
+//     dis_usb0: PIN_0,
+//   },
+//   power_button: PowerButtonResources {
+//     pin: PIN_20,
+//   },
+//   test_mode: TestModeResources {
+//     pin: PIN_16,
+//   },
+// }

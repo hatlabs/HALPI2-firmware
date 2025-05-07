@@ -8,7 +8,11 @@ use embassy_rp::{
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker};
 
-use crate::{config::{VIN_MAX, VSCAP_MAX}, config_resources::{AnalogInputResources, DigitalInputResources}};
+use crate::{
+    config::{VIN_MAX, VSCAP_MAX}, config_resources::{AnalogInputResources, DigitalInputResources, PowerButtonInputResources, UserButtonInputResources}, PowerButtonChannelType
+};
+
+use super::power_button::PowerButtonEvents;
 
 /// Input values that are read by the io_task and consumed by other tasks.
 #[derive(Clone, Format)]
@@ -17,10 +21,13 @@ pub struct Inputs {
     pub vscap: f32,
     pub iin: f32,
     pub cm_on: bool,
+    pub mcu_temp: f32,
     pub pcb_temp: f32,
     pub led_pwr: bool,
     pub led_active: bool,
     pub pg_5v: bool,
+    pub pwr_btn: bool,
+    pub user_btn: bool,
 }
 
 impl Inputs {
@@ -30,10 +37,13 @@ impl Inputs {
             vscap: 0.,
             iin: 0.,
             cm_on: false,
+            mcu_temp: 0.,
             pcb_temp: 0.,
             led_pwr: false,
             led_active: false,
             pg_5v: false,
+            pwr_btn: true,
+            user_btn: true,
         }
     }
 }
@@ -42,10 +52,44 @@ impl Inputs {
 pub static INPUTS: Mutex<CriticalSectionRawMutex, Inputs> = Mutex::new(Inputs::new());
 
 #[task]
+pub async fn power_button_input_task(
+    r: PowerButtonInputResources,
+    channel: &'static PowerButtonChannelType,
+) {
+    let mut button = Input::new(r.pin, Pull::Up);
+
+    loop {
+        button.wait_for_any_edge().await;
+        debug!("Power button event detected");
+        let mut inputs = INPUTS.lock().await;
+        // Update the power button input state
+        inputs.pwr_btn = button.is_high();
+        // Send the event to the channel
+        if inputs.pwr_btn {
+            channel.send(PowerButtonEvents::Release).await;
+        } else {
+            channel.send(PowerButtonEvents::Press).await;
+        }
+    }
+}
+
+#[task]
+pub async fn user_button_input_task(r: UserButtonInputResources) {
+    let mut button = Input::new(r.pin, Pull::Up);
+
+    loop {
+        button.wait_for_any_edge().await;
+        let mut inputs = INPUTS.lock().await;
+        // Update the user button input state
+        inputs.user_btn = button.is_high();
+    }
+}
+
+#[task]
 pub async fn digital_input_task(r: DigitalInputResources) {
     // Initialize the peripherals and GPIO pins
-    let led_pwr = Input::new(r.led_pwr, Pull::Down);
-    let led_active = Input::new(r.led_active, Pull::Down);
+    let led_pwr = Input::new(r.led_pwr, Pull::Up);
+    let led_active = Input::new(r.led_active, Pull::Up);
     let pg_5v = Input::new(r.pg_5v, Pull::Up);
     let cm_on = Input::new(r.cm_on, Pull::Down);
 
@@ -83,7 +127,7 @@ pub async fn analog_input_task(r: AnalogInputResources) {
     let mut vins = Channel::new_pin(r.vin_s, Pull::None);
     let mut vscaps = Channel::new_pin(r.vscap_s, Pull::None);
     let mut iin = Channel::new_pin(r.iin, Pull::None);
-    let mut pcb_temp = Channel::new_temp_sensor(r.temp_sensor);
+    let mut mcu_temp = Channel::new_temp_sensor(r.temp_sensor);
 
     let mut ticker = Ticker::every(Duration::from_millis(20));
 
@@ -95,15 +139,15 @@ pub async fn analog_input_task(r: AnalogInputResources) {
         let vin = adc.read(&mut vins).await;
         let vscap_value = adc.read(&mut vscaps).await;
         let iin_value = adc.read(&mut iin).await;
-        let pcb_temp_value = adc.read(&mut pcb_temp).await;
+        let mcu_temp_value = adc.read(&mut mcu_temp).await;
 
         let mut inputs = INPUTS.lock().await;
         inputs.vin = (vin.unwrap_or(0) as f32) * VIN_ADC_SCALE;
         inputs.vscap = (vscap_value.unwrap_or(0) as f32) * VSCAP_ADC_SCALE;
         inputs.iin = (iin_value.unwrap_or(0) as f32) * IIN_ADC_SCALE;
         // Convert to Kelvin
-        inputs.pcb_temp =
-            27.0 - (pcb_temp_value.unwrap_or(0) as f32 * 3.3 / 4096.0 - 0.706) / 0.001721 + 273.15;
+        inputs.mcu_temp =
+            27.0 - (mcu_temp_value.unwrap_or(0) as f32 * 3.3 / 4096.0 - 0.706) / 0.001721 + 273.15;
 
         trace!(
             "VIN: {}, VSCAP: {}, IIN: {}",
