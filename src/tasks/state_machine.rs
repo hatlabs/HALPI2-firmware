@@ -5,12 +5,23 @@ use core::fmt::Debug;
 use defmt::*;
 use embassy_executor::task;
 use embassy_rp::gpio::{Level, Output};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel;
 use embassy_time::{Duration, Instant, Ticker};
 
+use crate::config::*;
 use crate::config_resources::StateMachineOutputResources;
 use crate::tasks::gpio_input::INPUTS;
-use crate::{LEDBlinkerChannelType, PowerButtonChannelType, config::*};
 
+use super::led_blinker::LEDBlinkerChannelType;
+use super::power_button::PowerButtonChannelType;
+
+pub enum StateMachineEvents {
+    SetState(StateMachine),
+}
+
+pub type StateMachineChannelType = channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 8>;
+pub static STATE_MACHINE_EVENT_CHANNEL: StateMachineChannelType = channel::Channel::new();
 
 /// GPIO outputs that are controlled by the state machine task.
 struct Outputs {
@@ -103,6 +114,18 @@ impl OffState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WatchdogRebootState {
+    entry_time: Instant,
+}
+impl WatchdogRebootState {
+    pub fn new() -> Self {
+        WatchdogRebootState {
+            entry_time: Instant::now(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum StateMachine {
     Init(InitState),
@@ -113,6 +136,7 @@ pub enum StateMachine {
     Depleting(DepletingState),
     Shutdown(ShutdownState),
     Off(OffState),
+    WatchdogReboot(WatchdogRebootState),
 }
 
 impl StateMachine {
@@ -129,6 +153,7 @@ impl StateMachine {
             StateMachine::Depleting(state) => state.enter(context).await,
             StateMachine::Shutdown(state) => state.enter(context).await,
             StateMachine::Off(state) => state.enter(context).await,
+            StateMachine::WatchdogReboot(state) => state.enter(context).await,
         }
     }
     async fn exit(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
@@ -141,6 +166,7 @@ impl StateMachine {
             StateMachine::Depleting(state) => state.exit(context).await,
             StateMachine::Shutdown(state) => state.exit(context).await,
             StateMachine::Off(state) => state.exit(context).await,
+            StateMachine::WatchdogReboot(state) => state.exit(context).await,
         }
     }
     async fn run(&mut self, context: &mut StateMachineContext) -> Result<StateMachine, ()> {
@@ -153,6 +179,7 @@ impl StateMachine {
             StateMachine::Depleting(state) => state.run(context).await,
             StateMachine::Shutdown(state) => state.run(context).await,
             StateMachine::Off(state) => state.run(context).await,
+            StateMachine::WatchdogReboot(state) => state.run(context).await,
         }
     }
 }
@@ -425,6 +452,38 @@ impl State for OffState {
     }
 }
 
+impl State for WatchdogRebootState {
+    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
+        info!("Entering WatchdogRebootState");
+        self.entry_time = Instant::now();
+        // Set the LED blink pattern
+        self.set_led_pattern(context, &StateMachine::WatchdogReboot(*self))
+            .await?;
+        Ok(())
+    }
+
+    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
+        // Stay in this state for 5 seconds
+        let now = Instant::now();
+        if now.duration_since(self.entry_time) > Duration::from_secs(5) {
+            // Transition to OffState
+            return Ok(StateMachine::Off(OffState::new()));
+        }
+        // If CM is off, transition to OffState
+        let inputs = INPUTS.lock().await;
+        if !inputs.cm_on {
+            return Ok(StateMachine::Off(OffState::new()));
+        }
+        Ok(StateMachine::WatchdogReboot(*self))
+    }
+
+    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
+        info!("Exiting WatchdogRebootState");
+        // Cleanup state
+        Ok(())
+    }
+}
+
 #[task]
 pub async fn state_machine_task(
     smor: StateMachineOutputResources,
@@ -441,9 +500,24 @@ pub async fn state_machine_task(
 
     let mut ticker = Ticker::every(Duration::from_millis(500));
 
+    let receiver = STATE_MACHINE_EVENT_CHANNEL.receiver();
+
     loop {
         // Handle state machine transitions
         ticker.next().await;
+
+        if !receiver.is_empty() {
+            // Check for events from the channel
+            let event = receiver.receive().await;
+            match event {
+                StateMachineEvents::SetState(new_state) => {
+                    state.exit(&mut context).await.unwrap();
+                    state.enter(&mut context).await.unwrap();
+                    prev_state = state;
+                    state = new_state;
+                }
+            }
+        }
 
         state = state.run(&mut context).await.unwrap();
 

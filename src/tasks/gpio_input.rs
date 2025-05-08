@@ -9,10 +9,10 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker};
 
 use crate::{
-    config::{VIN_MAX, VSCAP_MAX}, config_resources::{AnalogInputResources, DigitalInputResources, PowerButtonInputResources, UserButtonInputResources}, PowerButtonChannelType
+    config::{VIN_MAX, VSCAP_MAX}, config_resources::{AnalogInputResources, DigitalInputResources, PowerButtonInputResources, UserButtonInputResources}
 };
 
-use super::power_button::PowerButtonEvents;
+use super::power_button::{PowerButtonChannelType, PowerButtonEvents};
 
 /// Input values that are read by the io_task and consumed by other tasks.
 #[derive(Clone, Format)]

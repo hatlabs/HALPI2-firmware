@@ -6,7 +6,8 @@ use alloc::vec::Vec;
 use embassy_executor::task;
 use embassy_rp::bind_interrupts;
 
-use embassy_sync::channel::Receiver;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::{self, Receiver};
 use embassy_time::{Duration, Instant, Ticker};
 
 use embassy_rp::peripherals::PIO0;
@@ -14,7 +15,6 @@ use embassy_rp::pio::{Instance, InterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
 use smart_leds::{brightness, gamma, RGB8};
 
-use crate::LEDBlinkerChannelType;
 use crate::config_resources::RGBLEDResources;
 
 const NUM_LEDS: usize = 5;
@@ -24,6 +24,9 @@ pub enum LEDBlinkerEvents {
     SetBrightness(u8),
     AddModifier(LEDPattern),
 }
+
+pub type LEDBlinkerChannelType = channel::Channel<CriticalSectionRawMutex, LEDBlinkerEvents, 8>;
+pub static LED_BLINKER_EVENT_CHANNEL: LEDBlinkerChannelType = channel::Channel::new();
 
 /// Input a value 0 to 255 to get a color value
 /// The colours are a transition r - g - b - back to r.

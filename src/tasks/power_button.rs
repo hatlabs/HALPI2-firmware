@@ -1,9 +1,10 @@
 use defmt::debug;
 use embassy_executor::task;
-use embassy_rp::gpio::{Level, Output, Pull};
+use embassy_rp::gpio::{Level, Output};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel};
 use embassy_time::{Duration, Timer};
 
-use crate::{config_resources::PowerButtonResources, PowerButtonChannelType};
+use crate::config_resources::PowerButtonResources;
 
 
 pub enum PowerButtonEvents {
@@ -13,6 +14,9 @@ pub enum PowerButtonEvents {
     DoubleClick,
     LongPress,
 }
+
+pub type PowerButtonChannelType = channel::Channel<CriticalSectionRawMutex, PowerButtonEvents, 8>;
+pub static POWER_BUTTON_EVENT_CHANNEL: PowerButtonChannelType = channel::Channel::new();
 
 #[task]
 pub async fn power_button_output_task(r: PowerButtonResources, channel: &'static PowerButtonChannelType) {

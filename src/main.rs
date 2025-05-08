@@ -3,8 +3,6 @@
 
 extern crate alloc;
 
-use cortex_m_rt::entry;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel};
 use embedded_alloc::LlffHeap as Heap;
 
 #[global_allocator]
@@ -14,7 +12,8 @@ const HEAP_SIZE: usize = 65536; // 64kB
 use defmt::{debug, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use tasks::{led_blinker::LEDBlinkerEvents, power_button::PowerButtonEvents};
+use tasks::led_blinker::LED_BLINKER_EVENT_CHANNEL;
+use tasks::power_button::POWER_BUTTON_EVENT_CHANNEL;
 use {defmt_rtt as _, panic_probe as _};
 
 mod config;
@@ -27,12 +26,6 @@ use crate::config_resources::{
     I2CSecondaryResources, PowerButtonInputResources, PowerButtonResources, RGBLEDResources,
     StateMachineOutputResources, TestModeResources, UserButtonInputResources,
 };
-
-type LEDBlinkerChannelType = channel::Channel<CriticalSectionRawMutex, LEDBlinkerEvents, 8>;
-static LED_BLINKER_EVENT_CHANNEL: LEDBlinkerChannelType = channel::Channel::new();
-
-type PowerButtonChannelType = channel::Channel<CriticalSectionRawMutex, PowerButtonEvents, 8>;
-static POWER_BUTTON_EVENT_CHANNEL: PowerButtonChannelType = channel::Channel::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -66,18 +59,20 @@ async fn main(spawner: Spawner) {
 
     spawner
         .spawn(tasks::gpio_input::user_button_input_task(
-            r.user_button_input
+            r.user_button_input,
         ))
         .unwrap();
 
-    spawner.spawn(tasks::power_button::power_button_output_task(
-        r.power_button,
-        &POWER_BUTTON_EVENT_CHANNEL,
-    )).unwrap();
+    spawner
+        .spawn(tasks::power_button::power_button_output_task(
+            r.power_button,
+            &POWER_BUTTON_EVENT_CHANNEL,
+        ))
+        .unwrap();
 
-    //spawner
-    //    .spawn(tasks::i2c_secondary::i2c_secondary_task(r.i2cs))
-    //    .unwrap();
+    spawner
+        .spawn(tasks::i2c_secondary::i2c_secondary_task(r.i2cs))
+        .unwrap();
 
     spawner
         .spawn(tasks::state_machine::state_machine_task(
@@ -94,9 +89,9 @@ async fn main(spawner: Spawner) {
         ))
         .unwrap();
 
-    spawner
-        .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
-        .unwrap();
+    //spawner
+    //    .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
+    //    .unwrap();
 
     // Main task can handle other initialization or remain idle
     loop {
