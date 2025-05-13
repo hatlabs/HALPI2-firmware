@@ -3,19 +3,23 @@ use core::fmt;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
+use defmt::{debug, info};
 use embassy_executor::task;
 use embassy_rp::bind_interrupts;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{self, Receiver};
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker};
 
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{Instance, InterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
-use smart_leds::{brightness, gamma, RGB8};
+use smart_leds::{RGB8, brightness, gamma};
 
+use crate::config::{LED_BRIGHTNESS_CONFIG_KEY, LED_BRIGHTNESS_DEFAULT};
 use crate::config_resources::RGBLEDResources;
+use crate::flash_config::CONFIG_MANAGER;
 
 const NUM_LEDS: usize = 5;
 
@@ -79,7 +83,9 @@ pub struct Off {
 
 impl Off {
     pub fn new(duration: u32) -> Self {
-        Self { duration_ms: duration }
+        Self {
+            duration_ms: duration,
+        }
     }
 }
 
@@ -131,7 +137,10 @@ pub struct Colors {
 
 impl Colors {
     pub fn new(duration_ms: u32, colors: [RGB8; NUM_LEDS]) -> Self {
-        Self { duration_ms, colors }
+        Self {
+            duration_ms,
+            colors,
+        }
     }
 }
 
@@ -246,18 +255,9 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
 
         // Apply brightness
 
-        //for led in self.data.iter_mut() {
-        //    *led = RGB8::new(
-        //        (led.r as u16 * self.brightness as u16 / 255) as u8,
-        //        (led.g as u16 * self.brightness as u16 / 255) as u8,
-        //        (led.b as u16 * self.brightness as u16 / 255) as u8,
-        //    );
-        //}
-
         let gamma_corrected = gamma(self.data.iter().cloned());
         let brightness_corrected = brightness(gamma_corrected, self.brightness);
-        let corrected_data = brightness_corrected
-            .map(|color| RGB8::new(color.r, color.g, color.b));
+        let corrected_data = brightness_corrected.map(|color| RGB8::new(color.r, color.g, color.b));
         // Write the data back into an RGB8 array
         let mut output_data: [RGB8; NUM_LEDS] = [RGB8::default(); NUM_LEDS];
         for (i, color) in corrected_data.enumerate() {
@@ -276,8 +276,47 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
     }
 }
 
+struct LEDBlinkerConfig {
+    brightness: u8,
+}
+impl Default for LEDBlinkerConfig {
+    fn default() -> Self {
+        Self {
+            brightness: LED_BRIGHTNESS_DEFAULT,
+        }
+    }
+}
+impl LEDBlinkerConfig {
+    const fn new(brightness: u8) -> Self {
+        Self { brightness }
+    }
+}
+
+static LED_BLINKER_CONFIG: Mutex<CriticalSectionRawMutex, LEDBlinkerConfig> =
+    Mutex::new(LEDBlinkerConfig::new(LED_BRIGHTNESS_DEFAULT));
+
+pub async fn set_led_brightness(brightness: u8) {
+    let mut config = LED_BLINKER_CONFIG.lock().await;
+    config.brightness = brightness;
+    let mut config_manager = CONFIG_MANAGER.get().await.lock().await;
+    config_manager
+        .set(LED_BRIGHTNESS_CONFIG_KEY, &brightness)
+        .await;
+
+    LED_BLINKER_EVENT_CHANNEL
+        .send(LEDBlinkerEvents::SetBrightness(brightness))
+        .await;
+    info!("LED brightness set to {}", brightness);
+}
+
+pub async fn get_led_brightness() -> u8 {
+    let config = LED_BLINKER_CONFIG.lock().await;
+    config.brightness
+}
+
 #[task]
 pub async fn led_blinker_task(r: RGBLEDResources, channel: &'static LEDBlinkerChannelType) {
+    info!("Initializing LED blinker task");
     let Pio {
         mut common, sm0, ..
     } = Pio::new(r.pio, Irqs);
@@ -294,12 +333,35 @@ pub async fn led_blinker_task(r: RGBLEDResources, channel: &'static LEDBlinkerCh
 
     let fragments: FragmentVec = vec![Box::new(Off { duration_ms: 1000 })];
     let pattern = LEDPattern::new(fragments);
+    let brightness = {
+        debug!("Getting LED brightness from config manager");
+        let mut config_manager = CONFIG_MANAGER.get().await.lock().await;
+        let brightness_result = config_manager.get(LED_BRIGHTNESS_CONFIG_KEY).await;
 
-    let mut led_blinker = LEDBlinker::new(ws2812, pattern, 255);
+        match brightness_result {
+            Ok(Some(value)) => {
+                debug!("LED brightness from config manager: {}", value);
+                value
+            }
+            Ok(None) => {
+                debug!("No LED brightness found in config manager, using default");
+                LED_BRIGHTNESS_DEFAULT
+            }
+            Err(_) => {
+                debug!("Error getting LED brightness from config manager");
+                LED_BRIGHTNESS_DEFAULT
+            }
+        }
+    };
+
+    let mut led_blinker = LEDBlinker::new(ws2812, pattern, brightness);
 
     let mut ticker = Ticker::every(Duration::from_millis(10));
 
     let receiver = channel.receiver();
+
+    info!("LED blinker task initialized");
+
     loop {
         if !(receiver.is_empty()) {
             let event = receiver.receive().await;
@@ -307,7 +369,11 @@ pub async fn led_blinker_task(r: RGBLEDResources, channel: &'static LEDBlinkerCh
             match event {
                 LEDBlinkerEvents::SetPattern(pattern) => led_blinker.set_pattern(pattern),
                 LEDBlinkerEvents::SetBrightness(brightness) => {
-                    led_blinker.set_brightness(brightness)
+                    led_blinker.set_brightness(brightness);
+                    {
+                        let mut config = LED_BLINKER_CONFIG.lock().await;
+                        config.brightness = brightness;
+                    }
                 }
                 LEDBlinkerEvents::AddModifier(modifier) => led_blinker.add_modifier(modifier),
             }

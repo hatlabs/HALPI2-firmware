@@ -3,21 +3,25 @@
 
 extern crate alloc;
 
+use config::FLASH_SIZE;
+use embassy_rp::flash::Async;
 use embedded_alloc::LlffHeap as Heap;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 const HEAP_SIZE: usize = 65536; // 64kB
 
-use defmt::{debug, info};
+use defmt::{debug, error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use flash_config::init_config_manager;
 use tasks::led_blinker::LED_BLINKER_EVENT_CHANNEL;
 use tasks::power_button::POWER_BUTTON_EVENT_CHANNEL;
 use {defmt_rtt as _, panic_probe as _};
 
 mod config;
 mod config_resources;
+mod flash_config;
 mod led_patterns;
 mod tasks;
 
@@ -40,6 +44,15 @@ async fn main(spawner: Spawner) {
     let r = split_resources!(p);
 
     info!("Starting up...");
+
+    // Initialize the config manager
+    let flash = embassy_rp::flash::Flash::<_, Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH1);
+
+    info!("Initializing config manager...");
+
+    init_config_manager(flash).await;
+
+    info!("Config manager initialized.");
 
     // Spawn the async tasks
     spawner

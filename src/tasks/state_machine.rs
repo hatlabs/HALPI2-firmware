@@ -490,6 +490,8 @@ pub async fn state_machine_task(
     power_button_channel: &'static PowerButtonChannelType,
     led_blinker_channel: &'static LEDBlinkerChannelType,
 ) {
+    info!("Starting state machine task");
+
     // Initialize resources
     let outputs = Outputs::new(smor);
 
@@ -501,6 +503,8 @@ pub async fn state_machine_task(
     let mut ticker = Ticker::every(Duration::from_millis(500));
 
     let receiver = STATE_MACHINE_EVENT_CHANNEL.receiver();
+
+    info!("State machine task initialized");
 
     loop {
         // Handle state machine transitions

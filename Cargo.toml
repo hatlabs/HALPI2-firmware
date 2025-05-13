@@ -27,13 +27,33 @@ cortex-m-rt = "0.7.3"
 #assign-resources = { git = "https://github.com/adamgreig/assign-resources", rev = "bd22cb7a92031fb16f74a5da42469d466c33383e" }
 assign-resources = { version = "0.4.1" }
 
-embassy-executor = { version = "0.7", features = ["task-arena-size-8192", "arch-cortex-m", "executor-thread", "defmt", "executor-interrupt"] }
+embassy-executor = { version = "0.7", features = [
+  "task-arena-size-8192",
+  "arch-cortex-m",
+  "executor-thread",
+  "defmt",
+  "executor-interrupt",
+] }
 embassy-sync = { version = "0.6" }
-embassy-time = { version = "0.4", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-time = { version = "0.4", features = [
+  "defmt",
+  "defmt-timestamp-uptime",
+] }
 cortex-m = { version = "0.7.6" }
-embassy-rp = { version = "0.4", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
+embassy-rp = { version = "0.4", features = [
+  "defmt",
+  "unstable-pac",
+  "time-driver",
+  "critical-section-impl",
+  "rp2040",
+] }
 smart-leds = "0.4.0"
 embedded-alloc = "0.6.0"
+sequential-storage = "4.0.1"
+serde = { version = "1.0.219", default-features = false, features = [
+  "derive",
+  "alloc",
+] }
 [profile.release]
 debug = 2
 lto = true

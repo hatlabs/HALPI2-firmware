@@ -56,7 +56,11 @@ pub async fn power_button_input_task(
     r: PowerButtonInputResources,
     channel: &'static PowerButtonChannelType,
 ) {
+    info!("Starting power button input task");
+
     let mut button = Input::new(r.pin, Pull::Up);
+
+    info!("Power button input task initialized");
 
     loop {
         button.wait_for_any_edge().await;
@@ -75,7 +79,11 @@ pub async fn power_button_input_task(
 
 #[task]
 pub async fn user_button_input_task(r: UserButtonInputResources) {
+    info!("Starting user button input task");
+
     let mut button = Input::new(r.pin, Pull::Up);
+
+    info!("User button input task initialized");
 
     loop {
         button.wait_for_any_edge().await;
@@ -87,6 +95,7 @@ pub async fn user_button_input_task(r: UserButtonInputResources) {
 
 #[task]
 pub async fn digital_input_task(r: DigitalInputResources) {
+    info!("Starting digital input task");
     // Initialize the peripherals and GPIO pins
     let led_pwr = Input::new(r.led_pwr, Pull::Up);
     let led_active = Input::new(r.led_active, Pull::Up);
@@ -94,6 +103,8 @@ pub async fn digital_input_task(r: DigitalInputResources) {
     let cm_on = Input::new(r.cm_on, Pull::Down);
 
     let mut ticker = Ticker::every(Duration::from_millis(10));
+
+    info!("Digital input task initialized");
 
     loop {
         ticker.next().await;
@@ -122,6 +133,7 @@ bind_interrupts!(struct Irqs {
 
 #[task]
 pub async fn analog_input_task(r: AnalogInputResources) {
+    info!("Starting analog input task");
     // Initialize the peripherals and GPIO pins
     let mut adc = Adc::new(r.adc, Irqs, Config::default());
     let mut vins = Channel::new_pin(r.vin_s, Pull::None);
@@ -130,6 +142,8 @@ pub async fn analog_input_task(r: AnalogInputResources) {
     let mut mcu_temp = Channel::new_temp_sensor(r.temp_sensor);
 
     let mut ticker = Ticker::every(Duration::from_millis(20));
+
+    info!("Analog input task initialized");
 
     loop {
         ticker.next().await;

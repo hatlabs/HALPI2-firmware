@@ -1,4 +1,4 @@
-use defmt::debug;
+use defmt::{debug, info};
 use embassy_executor::task;
 use embassy_rp::gpio::{Level, Output};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel};
@@ -20,9 +20,12 @@ pub static POWER_BUTTON_EVENT_CHANNEL: PowerButtonChannelType = channel::Channel
 
 #[task]
 pub async fn power_button_output_task(r: PowerButtonResources, channel: &'static PowerButtonChannelType) {
+    info!("Initializing power button output task");
     let mut button = Output::new(r.pin, Level::High);
 
     let receiver = channel.receiver();
+
+    info!("Power button output task initialized");
 
     loop {
         let event = receiver.receive().await;
