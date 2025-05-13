@@ -1,13 +1,18 @@
+use crate::config::HOST_WATCHDOG_DEFAULT_TIMEOUT_MS;
 use crate::config_resources::I2CSecondaryResources;
-use crate::tasks::state_machine::{StateMachine, StateMachineEvents, WatchdogRebootState, STATE_MACHINE_EVENT_CHANNEL};
-use defmt::{error, info, warn};
+use crate::tasks::gpio_input::INPUTS;
+use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
+use crate::tasks::state_machine::{
+    OffState, StateMachine, StateMachineEvents, WatchdogRebootState, STATE_MACHINE_EVENT_CHANNEL
+};
+use defmt::{Format, error, info, warn};
 use embassy_executor::task;
 use embassy_rp::peripherals::{I2C0, I2C1};
 use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use embedded_hal_async::i2c::I2c;
-use crate::tasks::gpio_input::INPUTS;
 
 // Following commands are supported by the I2C secondary interface:
 // - Read 0x01: Query legacy hardware version
@@ -47,22 +52,53 @@ bind_interrupts!(struct Irqs {
     I2C0_IRQ => i2c::InterruptHandler<I2C0>;
 });
 
+#[derive(Clone, Format)]
+struct HostWatchdogConfig {
+    timeout_ms: u16,
+}
+impl Default for HostWatchdogConfig {
+    fn default() -> Self {
+        Self { timeout_ms: HOST_WATCHDOG_DEFAULT_TIMEOUT_MS }
+    }
+}
+
+impl HostWatchdogConfig {
+    const fn new(timeout_ms: u16) -> Self {
+        Self { timeout_ms }
+    }
+}
+
+static HOST_WATCHDOG_CONFIG: Mutex<CriticalSectionRawMutex, HostWatchdogConfig> =
+    Mutex::new(HostWatchdogConfig::new(HOST_WATCHDOG_DEFAULT_TIMEOUT_MS));
+
+pub async fn get_host_watchdog_timeout_ms() -> u16 {
+    let config = HOST_WATCHDOG_CONFIG.lock().await;
+    config.timeout_ms
+}
+
+async fn set_host_watchdog_timeout_ms(timeout_ms: u16) {
+    let mut config = HOST_WATCHDOG_CONFIG.lock().await;
+    config.timeout_ms = timeout_ms;
+    HOST_WATCHDOG_EVENT_CHANNEL
+        .send(HostWatchdogEvents::SetTimeoutMs(timeout_ms))
+        .await;
+}
+
 pub enum HostWatchdogEvents {
     Ping,
-    SetTimeoutMs(u32),
+    SetTimeoutMs(u16),
 }
 
 type HostWatchdogChannelType =
     embassy_sync::channel::Channel<CriticalSectionRawMutex, HostWatchdogEvents, 8>;
-static HOST_WATCHDOG_EVENT_CHANNEL: HostWatchdogChannelType =
-    embassy_sync::channel::Channel::new();
+static HOST_WATCHDOG_EVENT_CHANNEL: HostWatchdogChannelType = embassy_sync::channel::Channel::new();
 
 // Run a watchdog task that will reset the system if it doesn't receive a ping
 // within a certain time frame. Any I2C command will reset the watchdog.
 #[task]
 pub async fn host_watchdog_task() {
     let mut last_ping = Instant::now();
-    let mut timeout_ms = 10000;
+    let mut timeout_ms = get_host_watchdog_timeout_ms().await;
 
     let mut ticker = Ticker::every(Duration::from_millis(100));
     let receiver = HOST_WATCHDOG_EVENT_CHANNEL.receiver();
@@ -85,7 +121,9 @@ pub async fn host_watchdog_task() {
             // Reset the system
             warn!("Watchdog timeout");
             let new_state = StateMachine::WatchdogReboot(WatchdogRebootState::new());
-            STATE_MACHINE_EVENT_CHANNEL.send(StateMachineEvents::SetState(new_state)).await;
+            STATE_MACHINE_EVENT_CHANNEL
+                .send(StateMachineEvents::SetState(new_state))
+                .await;
             last_ping = now;
         }
     }
@@ -93,11 +131,14 @@ pub async fn host_watchdog_task() {
 
 #[task]
 pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
+    info!("Starting I2C secondary task");
     let mut config = i2c_slave::Config::default();
     config.addr = I2C_ADDR as u16;
     let mut device = i2c_slave::I2cSlave::new(r.i2c, r.scl, r.sda, Irqs, config);
 
     let state = 0;
+
+    info!("I2C secondary task initialized");
 
     loop {
         // Handle I2C secondary (slave) communication
@@ -122,38 +163,60 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     }
                 }
             },
-            Ok(i2c_slave::Command::Write(len)) => info!("Device received write: {}", buf[..len]),
+            Ok(i2c_slave::Command::Write(len)) => {
+                info!("Device received write: {}", buf[..len]);
+                match buf[0] {
+                    // Set Raspi power off
+                    0x10 => {
+                        let inputs = INPUTS.lock().await;
+                        if inputs.pg_5v {
+                            // Power off the Raspi
+                            info!("Powering off the Raspi");
+                            let new_state = StateMachine::Off(OffState::new());
+                            STATE_MACHINE_EVENT_CHANNEL
+                                .send(StateMachineEvents::SetState(new_state))
+                                .await;
+                        } else {
+                            error!("Raspi power is already off");
+                        }
+                    }
+                    // Set watchdog timeout
+                    0x12 => {
+                        let timeout = u16::from_le_bytes([buf[1], buf[2]]);
+                        set_host_watchdog_timeout_ms(timeout).await;
+                    }
+                    // Set LED brightness
+                    0x17 => {
+                        let brightness = buf[1];
+                        info!("Setting LED brightness to {}", brightness);
+                        set_led_brightness(brightness).await;
+                    }
+                    x => error!("Invalid Write {:x}", x),
+                }
+            },
             Ok(i2c_slave::Command::WriteRead(len)) => {
                 info!("device received write read: {:x}", buf[..len]);
                 match buf[0] {
                     // Query legacy hardware version
-                    0x01 => {
-                        match device.respond_and_fill(&[LEGACY_HW_VERSION], 0x00).await {
-                            Ok(read_status) => info!("response read status {}", read_status),
-                            Err(e) => error!("error while responding {}", e),
-                        }
-                    }
+                    0x01 => match device.respond_and_fill(&[LEGACY_HW_VERSION], 0x00).await {
+                        Ok(read_status) => info!("response read status {}", read_status),
+                        Err(e) => error!("error while responding {}", e),
+                    },
                     // Query legacy firmware version
-                    0x02 => {
-                        match device.respond_and_fill(&[LEGACY_FW_VERSION], 0x00).await {
-                            Ok(read_status) => info!("response read status {}", read_status),
-                            Err(e) => error!("error while responding {}", e),
-                        }
-                    }
+                    0x02 => match device.respond_and_fill(&[LEGACY_FW_VERSION], 0x00).await {
+                        Ok(read_status) => info!("response read status {}", read_status),
+                        Err(e) => error!("error while responding {}", e),
+                    },
                     // Query hardware version
-                    0x03 => {
-                        match device.respond_and_fill(&HW_VERSION, 0x00).await {
-                            Ok(read_status) => info!("response read status {}", read_status),
-                            Err(e) => error!("error while responding {}", e),
-                        }
-                    }
+                    0x03 => match device.respond_and_fill(&HW_VERSION, 0x00).await {
+                        Ok(read_status) => info!("response read status {}", read_status),
+                        Err(e) => error!("error while responding {}", e),
+                    },
                     // Query firmware version
-                    0x04 => {
-                        match device.respond_and_fill(&FW_VERSION, 0x00).await {
-                            Ok(read_status) => info!("response read status {}", read_status),
-                            Err(e) => error!("error while responding {}", e),
-                        }
-                    }
+                    0x04 => match device.respond_and_fill(&FW_VERSION, 0x00).await {
+                        Ok(read_status) => info!("response read status {}", read_status),
+                        Err(e) => error!("error while responding {}", e),
+                    },
                     // Query Raspi power state
                     0x10 => {
                         let inputs = INPUTS.lock().await;
@@ -162,6 +225,27 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             Err(e) => error!("error while responding {}", e),
                         }
                     }
+                    // Query watchdog timeout
+                    0x12 => {
+                        let timeout = get_host_watchdog_timeout_ms().await;
+                        let timeout_bytes = [
+                            (timeout >> 8) as u8,
+                            (timeout & 0xff) as u8,
+                        ];
+                        match device.respond_and_fill(&timeout_bytes, 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+                    // Query LED brightness setting
+                    0x17 => {
+                        let brightness = get_led_brightness().await;
+                        match device.respond_and_fill(&[brightness], 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+
 
                     x => error!("Invalid Write Read {:x}", x),
                 }
