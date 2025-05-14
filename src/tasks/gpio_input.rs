@@ -9,7 +9,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker};
 
 use crate::{
-    config::{VIN_MAX, VSCAP_MAX}, config_resources::{AnalogInputResources, DigitalInputResources, PowerButtonInputResources, UserButtonInputResources}
+    config::{VIN_MAX_VALUE, VSCAP_MAX_VALUE}, config_resources::{AnalogInputResources, DigitalInputResources, PowerButtonInputResources, UserButtonInputResources}, tasks::power_button::POWER_BUTTON_EVENT_CHANNEL
 };
 
 use super::power_button::{PowerButtonChannelType, PowerButtonEvents};
@@ -54,7 +54,6 @@ pub static INPUTS: Mutex<CriticalSectionRawMutex, Inputs> = Mutex::new(Inputs::n
 #[task]
 pub async fn power_button_input_task(
     r: PowerButtonInputResources,
-    channel: &'static PowerButtonChannelType,
 ) {
     info!("Starting power button input task");
 
@@ -69,10 +68,10 @@ pub async fn power_button_input_task(
         // Update the power button input state
         inputs.pwr_btn = button.is_high();
         // Send the event to the channel
+        POWER_BUTTON_EVENT_CHANNEL.send(PowerButtonEvents::Release).await;
         if inputs.pwr_btn {
-            channel.send(PowerButtonEvents::Release).await;
         } else {
-            channel.send(PowerButtonEvents::Press).await;
+            POWER_BUTTON_EVENT_CHANNEL.send(PowerButtonEvents::Press).await;
         }
     }
 }
@@ -123,8 +122,8 @@ pub async fn digital_input_task(r: DigitalInputResources) {
     }
 }
 
-const VIN_ADC_SCALE: f32 = VIN_MAX / 4096.0; // Scale factor for Vin readings
-const VSCAP_ADC_SCALE: f32 = VSCAP_MAX / 4096.0; // Scale factor for Vscap readings
+const VIN_ADC_SCALE: f32 = VIN_MAX_VALUE / 4096.0; // Scale factor for Vin readings
+const VSCAP_ADC_SCALE: f32 = VSCAP_MAX_VALUE / 4096.0; // Scale factor for Vscap readings
 const IIN_ADC_SCALE: f32 = 3.3 / 4096.0;
 
 bind_interrupts!(struct Irqs {

@@ -1,6 +1,6 @@
 use crate::led_patterns::get_state_pattern;
-use crate::tasks::led_blinker::LEDBlinkerEvents;
-use crate::tasks::power_button::PowerButtonEvents;
+use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
+use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
 use core::fmt::Debug;
 use defmt::*;
 use embassy_executor::task;
@@ -126,6 +126,22 @@ impl WatchdogRebootState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SleepShutdownState {}
+impl SleepShutdownState {
+    pub fn new() -> Self {
+        SleepShutdownState {}
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SleepState {}
+impl SleepState {
+    pub fn new() -> Self {
+        SleepState {}
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum StateMachine {
     Init(InitState),
@@ -137,6 +153,8 @@ pub enum StateMachine {
     Shutdown(ShutdownState),
     Off(OffState),
     WatchdogReboot(WatchdogRebootState),
+    SleepShutdown(SleepShutdownState),
+    Sleep(SleepState),
 }
 
 impl StateMachine {
@@ -154,6 +172,8 @@ impl StateMachine {
             StateMachine::Shutdown(state) => state.enter(context).await,
             StateMachine::Off(state) => state.enter(context).await,
             StateMachine::WatchdogReboot(state) => state.enter(context).await,
+            StateMachine::SleepShutdown(state) => state.enter(context).await,
+            StateMachine::Sleep(state) => state.enter(context).await,
         }
     }
     async fn exit(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
@@ -167,6 +187,8 @@ impl StateMachine {
             StateMachine::Shutdown(state) => state.exit(context).await,
             StateMachine::Off(state) => state.exit(context).await,
             StateMachine::WatchdogReboot(state) => state.exit(context).await,
+            StateMachine::SleepShutdown(state) => state.exit(context).await,
+            StateMachine::Sleep(state) => state.exit(context).await,
         }
     }
     async fn run(&mut self, context: &mut StateMachineContext) -> Result<StateMachine, ()> {
@@ -180,6 +202,8 @@ impl StateMachine {
             StateMachine::Shutdown(state) => state.run(context).await,
             StateMachine::Off(state) => state.run(context).await,
             StateMachine::WatchdogReboot(state) => state.run(context).await,
+            StateMachine::SleepShutdown(state) => state.run(context).await,
+            StateMachine::Sleep(state) => state.run(context).await,
         }
     }
 }
@@ -243,7 +267,7 @@ impl State for OffNoVinState {
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         let inputs = INPUTS.lock().await;
-        if inputs.vin > VIN_OFF {
+        if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
             // Transition to OffChargingState
             return Ok(StateMachine::OffCharging(OffChargingState {}));
         }
@@ -268,11 +292,11 @@ impl State for OffChargingState {
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         let inputs = INPUTS.lock().await;
-        if inputs.vscap > VSCAP_POWER_ON {
+        if inputs.vscap > DEFAULT_VSCAP_POWER_ON_THRESHOLD {
             // Transition to BootingState
             return Ok(StateMachine::Booting(BootingState {}));
         }
-        if inputs.vin < VIN_OFF {
+        if inputs.vin < DEFAULT_VIN_POWER_THRESHOLD {
             // Transition to OffNoVinState
             return Ok(StateMachine::OffNoVin(OffNoVinState {}));
         }
@@ -308,7 +332,7 @@ impl State for BootingState {
             // Transition to OnState
             return Ok(StateMachine::On(OnState {}));
         }
-        if inputs.vin < VIN_OFF {
+        if inputs.vin < DEFAULT_VIN_POWER_THRESHOLD {
             // Transition to OffNoVinState
             return Ok(StateMachine::OffNoVin(OffNoVinState {}));
         }
@@ -334,7 +358,7 @@ impl State for OnState {
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         let inputs = INPUTS.lock().await;
-        if inputs.vin < VIN_OFF {
+        if inputs.vin < DEFAULT_VIN_POWER_THRESHOLD {
             // Transition to DepletingState
             return Ok(StateMachine::Depleting(DepletingState::new()));
         }
@@ -369,7 +393,7 @@ impl State for DepletingState {
             return Ok(StateMachine::Shutdown(ShutdownState::new()));
         }
 
-        if inputs.vin > VIN_OFF {
+        if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
             // Transition to OnState
             return Ok(StateMachine::On(OnState {}));
         }
@@ -405,7 +429,7 @@ impl State for ShutdownState {
         let now = Instant::now();
         if !inputs.cm_on
             || now.duration_since(self.entry_time)
-                > Duration::from_millis(SHUTDOWN_WAIT_DURATION_MS as u64)
+                > Duration::from_millis(DEFAULT_SHUTDOWN_WAIT_DURATION_MS as u64)
         {
             // Transition to OffState
             return Ok(StateMachine::Off(OffState::new()));
@@ -438,7 +462,7 @@ impl State for OffState {
 
     async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
         let inputs = INPUTS.lock().await;
-        if inputs.vin > VIN_OFF {
+        if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
             // Transition to OffChargingState
             return Ok(StateMachine::OffCharging(OffChargingState {}));
         }
@@ -484,18 +508,70 @@ impl State for WatchdogRebootState {
     }
 }
 
+impl State for SleepShutdownState {
+    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
+        info!("Entering SleepShutdownState");
+        // Set the LED blink pattern
+        self.set_led_pattern(context, &StateMachine::SleepShutdown(*self))
+            .await?;
+        Ok(())
+    }
+
+    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
+        let inputs = INPUTS.lock().await;
+        // FIXME: SleepShutdown state logic needs to be defined
+        if inputs.cm_on {
+            // Transition to SleepState
+            return Ok(StateMachine::Sleep(SleepState::new()));
+        }
+        Ok(StateMachine::SleepShutdown(*self))
+    }
+
+    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
+        info!("Exiting SleepShutdownState");
+        // Cleanup state
+        Ok(())
+    }
+}
+
+impl State for SleepState {
+    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
+        info!("Entering SleepState");
+        // Set the LED blink pattern
+        self.set_led_pattern(context, &StateMachine::Sleep(*self))
+            .await?;
+        Ok(())
+    }
+
+    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
+        let inputs = INPUTS.lock().await;
+        // FIXME: Sleep state logic needs to be defined
+        if inputs.cm_on {
+            // Transition to OffNoVinState
+            return Ok(StateMachine::OffNoVin(OffNoVinState {}));
+        }
+        Ok(StateMachine::Sleep(*self))
+    }
+
+    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
+        info!("Exiting SleepState");
+        // Cleanup state
+        Ok(())
+    }
+}
+
 #[task]
-pub async fn state_machine_task(
-    smor: StateMachineOutputResources,
-    power_button_channel: &'static PowerButtonChannelType,
-    led_blinker_channel: &'static LEDBlinkerChannelType,
-) {
+pub async fn state_machine_task(smor: StateMachineOutputResources) {
     info!("Starting state machine task");
 
     // Initialize resources
     let outputs = Outputs::new(smor);
 
-    let mut context = StateMachineContext::new(outputs, power_button_channel, led_blinker_channel);
+    let mut context = StateMachineContext::new(
+        outputs,
+        &POWER_BUTTON_EVENT_CHANNEL,
+        &LED_BLINKER_EVENT_CHANNEL,
+    );
 
     let mut prev_state = StateMachine::Init(InitState {});
     let mut state = prev_state;

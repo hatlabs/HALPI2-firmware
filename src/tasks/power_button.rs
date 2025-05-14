@@ -19,11 +19,11 @@ pub type PowerButtonChannelType = channel::Channel<CriticalSectionRawMutex, Powe
 pub static POWER_BUTTON_EVENT_CHANNEL: PowerButtonChannelType = channel::Channel::new();
 
 #[task]
-pub async fn power_button_output_task(r: PowerButtonResources, channel: &'static PowerButtonChannelType) {
+pub async fn power_button_output_task(r: PowerButtonResources) {
     info!("Initializing power button output task");
     let mut button = Output::new(r.pin, Level::High);
 
-    let receiver = channel.receiver();
+    let receiver = POWER_BUTTON_EVENT_CHANNEL.receiver();
 
     info!("Power button output task initialized");
 

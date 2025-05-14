@@ -17,7 +17,7 @@ use embassy_rp::pio::{Instance, InterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
 use smart_leds::{RGB8, brightness, gamma};
 
-use crate::config::{LED_BRIGHTNESS_CONFIG_KEY, LED_BRIGHTNESS_DEFAULT};
+use crate::config::{LED_BRIGHTNESS_CONFIG_KEY, DEFAULT_LED_BRIGHTNESS};
 use crate::config_resources::RGBLEDResources;
 use crate::flash_config::CONFIG_MANAGER;
 
@@ -282,7 +282,7 @@ struct LEDBlinkerConfig {
 impl Default for LEDBlinkerConfig {
     fn default() -> Self {
         Self {
-            brightness: LED_BRIGHTNESS_DEFAULT,
+            brightness: DEFAULT_LED_BRIGHTNESS,
         }
     }
 }
@@ -293,7 +293,7 @@ impl LEDBlinkerConfig {
 }
 
 static LED_BLINKER_CONFIG: Mutex<CriticalSectionRawMutex, LEDBlinkerConfig> =
-    Mutex::new(LEDBlinkerConfig::new(LED_BRIGHTNESS_DEFAULT));
+    Mutex::new(LEDBlinkerConfig::new(DEFAULT_LED_BRIGHTNESS));
 
 pub async fn set_led_brightness(brightness: u8) {
     let mut config = LED_BLINKER_CONFIG.lock().await;
@@ -315,7 +315,7 @@ pub async fn get_led_brightness() -> u8 {
 }
 
 #[task]
-pub async fn led_blinker_task(r: RGBLEDResources, channel: &'static LEDBlinkerChannelType) {
+pub async fn led_blinker_task(r: RGBLEDResources) {
     info!("Initializing LED blinker task");
     let Pio {
         mut common, sm0, ..
@@ -345,11 +345,11 @@ pub async fn led_blinker_task(r: RGBLEDResources, channel: &'static LEDBlinkerCh
             }
             Ok(None) => {
                 debug!("No LED brightness found in config manager, using default");
-                LED_BRIGHTNESS_DEFAULT
+                DEFAULT_LED_BRIGHTNESS
             }
             Err(_) => {
                 debug!("Error getting LED brightness from config manager");
-                LED_BRIGHTNESS_DEFAULT
+                DEFAULT_LED_BRIGHTNESS
             }
         }
     };
@@ -358,7 +358,7 @@ pub async fn led_blinker_task(r: RGBLEDResources, channel: &'static LEDBlinkerCh
 
     let mut ticker = Ticker::every(Duration::from_millis(10));
 
-    let receiver = channel.receiver();
+    let receiver = LED_BLINKER_EVENT_CHANNEL.receiver();
 
     info!("LED blinker task initialized");
 

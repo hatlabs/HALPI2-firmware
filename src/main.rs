@@ -78,7 +78,6 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(tasks::gpio_input::power_button_input_task(
             r.power_button_input,
-            &POWER_BUTTON_EVENT_CHANNEL,
         ))
         .unwrap();
 
@@ -91,8 +90,11 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(tasks::power_button::power_button_output_task(
             r.power_button,
-            &POWER_BUTTON_EVENT_CHANNEL,
         ))
+        .unwrap();
+
+    spawner
+        .spawn(tasks::host_watchdog::host_watchdog_task())
         .unwrap();
 
     spawner
@@ -102,16 +104,11 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(tasks::state_machine::state_machine_task(
             r.state_machine_outputs,
-            &POWER_BUTTON_EVENT_CHANNEL,
-            &LED_BLINKER_EVENT_CHANNEL,
         ))
         .unwrap();
 
     spawner
-        .spawn(tasks::led_blinker::led_blinker_task(
-            r.rgb_led,
-            &LED_BLINKER_EVENT_CHANNEL,
-        ))
+        .spawn(tasks::led_blinker::led_blinker_task(r.rgb_led))
         .unwrap();
 
     //spawner
