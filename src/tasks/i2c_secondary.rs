@@ -1,18 +1,25 @@
-use crate::config::HOST_WATCHDOG_DEFAULT_TIMEOUT_MS;
+use crate::config::{
+    IIN_MAX_VALUE, MAX_TEMPERATURE_VALUE, MIN_TEMPERATURE_VALUE,
+    VIN_MAX_VALUE, VSCAP_MAX_VALUE,
+};
 use crate::config_resources::I2CSecondaryResources;
+use crate::flash_config::{
+    get_vscap_power_off_threshold, get_vscap_power_on_threshold, set_vscap_power_off_threshold,
+    set_vscap_power_on_threshold,
+};
 use crate::tasks::gpio_input::INPUTS;
+use crate::tasks::host_watchdog::{
+    HOST_WATCHDOG_EVENT_CHANNEL, HostWatchdogEvents, get_host_watchdog_timeout_ms,
+    set_host_watchdog_timeout_ms,
+};
 use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
 use crate::tasks::state_machine::{
-    OffState, StateMachine, StateMachineEvents, WatchdogRebootState, STATE_MACHINE_EVENT_CHANNEL
+    OffState, STATE_MACHINE_EVENT_CHANNEL, SleepShutdownState, StateMachine, StateMachineEvents,
 };
-use defmt::{Format, error, info, warn};
+use defmt::{error, info};
 use embassy_executor::task;
-use embassy_rp::peripherals::{I2C0, I2C1};
+use embassy_rp::peripherals::I2C0;
 use embassy_rp::{bind_interrupts, i2c, i2c_slave};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Ticker, Timer};
-use embedded_hal_async::i2c::I2c;
 
 // Following commands are supported by the I2C secondary interface:
 // - Read 0x01: Query legacy hardware version
@@ -25,12 +32,12 @@ use embedded_hal_async::i2c::I2c;
 // - Read 0x12: Query watchdog timeout
 // - Write 0x12 [NN]: Set watchdog timeout to 0.1*NN seconds
 // - Write 0x12 0x00: Disable watchdog
-// - Read 0x13: Query power-on threshold voltage
-// - Write 0x13 [NN]: Set power-on threshold voltage to 0.01*NN V
-// - Read 0x14: Query power-off threshold voltage
-// - Write 0x14 [NN]: Set power-off threshold voltage to 0.01*NN V
+// - Read 0x13: Query power-on supercap threshold voltage
+// - Write 0x13 [NN]: Set power-on supercap threshold voltage to 0.01*NN V
+// - Read 0x14: Query power-off supercap threshold voltage
+// - Write 0x14 [NN]: Set power-off supercap threshold voltage to 0.01*NN V
 // - Read 0x15: Query state machine state
-// - Read 0x16: Query watchdog elapsed
+// - Read 0x16: Query watchdog elapsed (always returns 0x00)
 // - Read 0x17: Query LED brightness setting
 // - Write 0x17 [NN]: Set LED brightness to NN
 // - Read 0x20: Query DC IN voltage
@@ -51,83 +58,6 @@ const HW_VERSION: [u8; 4] = [3, 0, 0, 0x02];
 bind_interrupts!(struct Irqs {
     I2C0_IRQ => i2c::InterruptHandler<I2C0>;
 });
-
-#[derive(Clone, Format)]
-struct HostWatchdogConfig {
-    timeout_ms: u16,
-}
-impl Default for HostWatchdogConfig {
-    fn default() -> Self {
-        Self { timeout_ms: HOST_WATCHDOG_DEFAULT_TIMEOUT_MS }
-    }
-}
-
-impl HostWatchdogConfig {
-    const fn new(timeout_ms: u16) -> Self {
-        Self { timeout_ms }
-    }
-}
-
-static HOST_WATCHDOG_CONFIG: Mutex<CriticalSectionRawMutex, HostWatchdogConfig> =
-    Mutex::new(HostWatchdogConfig::new(HOST_WATCHDOG_DEFAULT_TIMEOUT_MS));
-
-pub async fn get_host_watchdog_timeout_ms() -> u16 {
-    let config = HOST_WATCHDOG_CONFIG.lock().await;
-    config.timeout_ms
-}
-
-async fn set_host_watchdog_timeout_ms(timeout_ms: u16) {
-    let mut config = HOST_WATCHDOG_CONFIG.lock().await;
-    config.timeout_ms = timeout_ms;
-    HOST_WATCHDOG_EVENT_CHANNEL
-        .send(HostWatchdogEvents::SetTimeoutMs(timeout_ms))
-        .await;
-}
-
-pub enum HostWatchdogEvents {
-    Ping,
-    SetTimeoutMs(u16),
-}
-
-type HostWatchdogChannelType =
-    embassy_sync::channel::Channel<CriticalSectionRawMutex, HostWatchdogEvents, 8>;
-static HOST_WATCHDOG_EVENT_CHANNEL: HostWatchdogChannelType = embassy_sync::channel::Channel::new();
-
-// Run a watchdog task that will reset the system if it doesn't receive a ping
-// within a certain time frame. Any I2C command will reset the watchdog.
-#[task]
-pub async fn host_watchdog_task() {
-    let mut last_ping = Instant::now();
-    let mut timeout_ms = get_host_watchdog_timeout_ms().await;
-
-    let mut ticker = Ticker::every(Duration::from_millis(100));
-    let receiver = HOST_WATCHDOG_EVENT_CHANNEL.receiver();
-    loop {
-        ticker.next().await;
-        if !receiver.is_empty() {
-            let event = receiver.receive().await;
-            match event {
-                HostWatchdogEvents::Ping => {
-                    last_ping = Instant::now();
-                }
-                HostWatchdogEvents::SetTimeoutMs(timeout) => {
-                    timeout_ms = timeout;
-                }
-            }
-        }
-        // Check if the watchdog has been pinged
-        let now = Instant::now();
-        if now.duration_since(last_ping) > Duration::from_millis(timeout_ms as u64) {
-            // Reset the system
-            warn!("Watchdog timeout");
-            let new_state = StateMachine::WatchdogReboot(WatchdogRebootState::new());
-            STATE_MACHINE_EVENT_CHANNEL
-                .send(StateMachineEvents::SetState(new_state))
-                .await;
-            last_ping = now;
-        }
-    }
-}
 
 #[task]
 pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
@@ -165,25 +95,71 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
             },
             Ok(i2c_slave::Command::Write(len)) => {
                 info!("Device received write: {}", buf[..len]);
+                if len < 2 {
+                    error!("Write command too short");
+                    continue;
+                }
+
                 match buf[0] {
-                    // Set Raspi power off
+                    // Set Raspi power off/on
                     0x10 => {
-                        let inputs = INPUTS.lock().await;
-                        if inputs.pg_5v {
-                            // Power off the Raspi
-                            info!("Powering off the Raspi");
-                            let new_state = StateMachine::Off(OffState::new());
-                            STATE_MACHINE_EVENT_CHANNEL
-                                .send(StateMachineEvents::SetState(new_state))
-                                .await;
-                        } else {
-                            error!("Raspi power is already off");
+                        match buf[1] {
+                            0x00 => {
+                                let inputs = INPUTS.lock().await;
+                                if inputs.pg_5v {
+                                    // Power off the Raspi
+                                    info!("Powering off the Raspi");
+                                    let new_state = StateMachine::Off(OffState::new());
+                                    STATE_MACHINE_EVENT_CHANNEL
+                                        .send(StateMachineEvents::SetState(new_state))
+                                        .await;
+                                } else {
+                                    error!("Raspi power is already off");
+                                }
+                            }
+                            0x01 => {
+                                info!("Powering on the Raspi (not implemented)");
+                                // Note: The comment suggests this is not needed/expected to be implemented
+                            }
+                            _ => {
+                                error!("Invalid power state: {}", buf[1]);
+                            }
                         }
                     }
                     // Set watchdog timeout
                     0x12 => {
-                        let timeout = u16::from_le_bytes([buf[1], buf[2]]);
-                        set_host_watchdog_timeout_ms(timeout).await;
+                        if len != 3 {
+                            // Need exactly 3 bytes for the timeout value
+                            error!("Invalid watchdog timeout command length");
+                        } else {
+                            let timeout = u16::from_be_bytes([buf[1], buf[2]]);
+                            info!("Setting watchdog timeout to {} ms", timeout);
+                            set_host_watchdog_timeout_ms(timeout).await;
+                        }
+                    }
+                    // Set supercap power-on threshold voltage
+                    0x13 => {
+                        if len != 3 {
+                            // Need exactly 3 bytes for the threshold value
+                            error!("Invalid power-on threshold command length");
+                        } else {
+                            let cthreshold = u16::from_be_bytes([buf[2], buf[1]]);
+                            let threshold: f32 = cthreshold as f32 / 100.0; // Convert to millivolts (0.01*NN V)
+                            info!("Setting power-on threshold to {} V", threshold);
+                            set_vscap_power_on_threshold(threshold).await;
+                        }
+                    }
+                    // Set supercap power-off threshold voltage
+                    0x14 => {
+                        if len != 3 {
+                            // Need exactly 3 bytes for the threshold value
+                            error!("Invalid power-off threshold command length");
+                        } else {
+                            let cthreshold = u16::from_be_bytes([buf[2], buf[1]]);
+                            let threshold: f32 = cthreshold as f32 / 100.0; // Convert to millivolts (0.01*NN V)
+                            info!("Setting power-off threshold to {} V", threshold);
+                            set_vscap_power_off_threshold(threshold).await;
+                        }
                     }
                     // Set LED brightness
                     0x17 => {
@@ -191,9 +167,25 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         info!("Setting LED brightness to {}", brightness);
                         set_led_brightness(brightness).await;
                     }
-                    x => error!("Invalid Write {:x}", x),
+                    // Initiate shutdown
+                    0x30 => {
+                        info!("Initiating shutdown");
+                        let new_state = StateMachine::Off(OffState::new());
+                        STATE_MACHINE_EVENT_CHANNEL
+                            .send(StateMachineEvents::SetState(new_state))
+                            .await;
+                    }
+                    // Initiate sleep shutdown
+                    0x31 => {
+                        info!("Initiating sleep shutdown");
+                        let new_state = StateMachine::SleepShutdown(SleepShutdownState::new());
+                        STATE_MACHINE_EVENT_CHANNEL
+                            .send(StateMachineEvents::SetState(new_state))
+                            .await;
+                    }
+                    x => error!("Invalid Write command: 0x{:02x}", x),
                 }
-            },
+            }
             Ok(i2c_slave::Command::WriteRead(len)) => {
                 info!("device received write read: {:x}", buf[..len]);
                 match buf[0] {
@@ -228,15 +220,47 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     // Query watchdog timeout
                     0x12 => {
                         let timeout = get_host_watchdog_timeout_ms().await;
-                        let timeout_bytes = [
-                            (timeout >> 8) as u8,
-                            (timeout & 0xff) as u8,
-                        ];
+                        let timeout_bytes = timeout.to_be_bytes();
                         match device.respond_and_fill(&timeout_bytes, 0x00).await {
                             Ok(read_status) => info!("response read status {}", read_status),
                             Err(e) => error!("error while responding {}", e),
                         }
                     }
+                    // Query power-on threshold voltage
+                    0x13 => {
+                        let threshold = get_vscap_power_on_threshold().await;
+                        let threshold_centi = (100.0 * threshold) as u16; // Convert to centivolt
+                        let threshold_bytes = threshold_centi.to_be_bytes();
+                        match device.respond_and_fill(&threshold_bytes, 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+                    // Query power-off threshold voltage
+                    0x14 => {
+                        let threshold = get_vscap_power_off_threshold().await;
+                        let threshold_centi = (100.0 * threshold) as u16; // Convert to centivolt
+                        let msb_bytes = threshold_centi.to_be_bytes();
+                        match device.respond_and_fill(&msb_bytes, 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+                    // Query state machine state
+                    0x15 => {
+                        // TODO: Implement state machine state query
+                        // For now, return a placeholder value
+                        let state_value: u8 = 0x01; // Placeholder
+                        match device.respond_and_fill(&[state_value], 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+                    // Query watchdog elapsed time (always returns 0x00)
+                    0x16 => match device.respond_and_fill(&[0], 0x00).await {
+                        Ok(read_status) => info!("response read status {}", read_status),
+                        Err(e) => error!("error while responding {}", e),
+                    },
                     // Query LED brightness setting
                     0x17 => {
                         let brightness = get_led_brightness().await;
@@ -245,14 +269,57 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             Err(e) => error!("error while responding {}", e),
                         }
                     }
+                    // Query DC IN voltage
+                    0x20 => {
+                        let voltage = INPUTS.lock().await.vin;
+                        let voltage_bytes =
+                            ((65535.0 * voltage / VIN_MAX_VALUE) as u16).to_be_bytes();
+                        match device.respond_and_fill(&voltage_bytes, 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+                    // Query supercap voltage
+                    0x21 => {
+                        let voltage = INPUTS.lock().await.vscap;
+                        let voltage_bytes =
+                            ((65536.0 * voltage / VSCAP_MAX_VALUE) as u16).to_be_bytes();
+                        match device.respond_and_fill(&voltage_bytes, 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+                    // Query DC IN current
+                    0x22 => {
+                        let current = INPUTS.lock().await.iin;
+                        let current_bytes =
+                            ((65535.0 * current / IIN_MAX_VALUE) as u16).to_be_bytes();
+                        match device.respond_and_fill(&current_bytes, 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+                    // Query MCU temperature
+                    0x23 => {
+                        let temp = INPUTS.lock().await.mcu_temp;
+                        // Scale the temperatures between MIN_TEMPERATURE_VALUE and
+                        // MAX_TEMPERATURE_VALUE to 0..65535
+                        let temp_bytes = ((65535.0 * (temp - MIN_TEMPERATURE_VALUE)
+                            / (MAX_TEMPERATURE_VALUE - MIN_TEMPERATURE_VALUE))
+                            as u16)
+                            .to_be_bytes();
 
-
-                    x => error!("Invalid Write Read {:x}", x),
+                        match device.respond_and_fill(&temp_bytes, 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+                    }
+                    x => error!("Invalid Write Read command: 0x{:02x}", x),
                 }
             }
-
             Err(e) => error!("{}", e),
         }
+        // Update watchdog on any I2C activity
         HOST_WATCHDOG_EVENT_CHANNEL
             .send(HostWatchdogEvents::Ping)
             .await;
