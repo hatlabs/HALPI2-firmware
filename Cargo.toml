@@ -1,71 +1,8 @@
-[package]
-edition = "2024"
-name = "halpi2-rs-firmware"
-version = "0.1.0"
-authors = ["Matti Airas <matti.airas@hatlabs.fi>"]
-resolver = "2"
-
-[[bin]]
-name = "halpi2-rs-firmware"
-test = false
-bench = false
-
-[dependencies]
-defmt = "1.0.1"
-defmt-rtt = "1.0.0"
-panic-probe = { version = "1.0.0", features = ["print-defmt"] }
-
-embedded-hal = "1.0.0"
-embedded-hal-async = "1.0.0"
-embedded-io = "0.6.1"
-embedded-io-async = "0.6.1"
-embedded-storage = "0.3.1"
-
-cortex-m-rt = "0.7.3"
-
-# for assign resources example
-#assign-resources = { git = "https://github.com/adamgreig/assign-resources", rev = "bd22cb7a92031fb16f74a5da42469d466c33383e" }
-assign-resources = { version = "0.4.1" }
-
-embassy-executor = { version = "0.7", features = [
-  "task-arena-size-8192",
-  "arch-cortex-m",
-  "executor-thread",
-  "defmt",
-  "executor-interrupt",
-] }
-embassy-sync = { version = "0.6" }
-embassy-time = { version = "0.4", features = [
-  "defmt",
-  "defmt-timestamp-uptime",
-] }
-cortex-m = { version = "0.7.6" }
-embassy-rp = { version = "0.4", features = [
-  "defmt",
-  "unstable-pac",
-  "time-driver",
-  "critical-section-impl",
-  "rp2040",
-] }
-smart-leds = "0.4.0"
-embedded-alloc = "0.6.0"
-sequential-storage = "4.0.1"
-serde = { version = "1.0.219", default-features = false, features = [
-  "derive",
-  "alloc",
-] }
-embassy-boot = "0.4.0"
-embedded-storage-async = "0.4.1"
-embassy-embedded-hal = "0.3.0"
-postcard = { version = "1.1.1", features = ["alloc", "use-crc"] }
-crc = "3.3.0"
-postcard-bindgen = "0.7.0"
-[profile.release]
-debug = 2
-lto = true
-opt-level = 'z'
-
-[profile.dev]
-debug = 2
-lto = true
-opt-level = "z"
+[workspace]
+resolver = "3"
+members = [
+    "firmware",
+    "gen-bindings",
+    "shared-types",
+]
+default-members = ["firmware"]

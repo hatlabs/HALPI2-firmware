@@ -11,7 +11,7 @@ use embedded_storage_async::nor_flash::NorFlash;
 
 use crate::OM_FLASH;
 
-use super::i2c_secondary::FlashUpdateState;
+use shared_types::FlashUpdateState;
 
 // Message passed from I2C task to Flash writer task
 pub enum FlashWriteRequest {
