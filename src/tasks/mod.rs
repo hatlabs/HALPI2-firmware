@@ -5,3 +5,4 @@ pub(crate) mod led_blinker;
 pub(crate) mod gpio_input;
 pub(crate) mod power_button;
 pub(crate) mod host_watchdog;
+pub(crate) mod flash_writer;

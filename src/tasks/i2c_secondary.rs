@@ -7,6 +7,7 @@ use crate::flash_config::{
     get_vscap_power_off_threshold, get_vscap_power_on_threshold, set_vscap_power_off_threshold,
     set_vscap_power_on_threshold,
 };
+use crate::tasks::flash_writer::{FlashWriteRequest, FLASH_WRITE_REQUEST_CHANNEL};
 use crate::tasks::gpio_input::INPUTS;
 use crate::tasks::host_watchdog::{
     HOST_WATCHDOG_EVENT_CHANNEL, HostWatchdogEvents, get_host_watchdog_timeout_ms,
@@ -16,10 +17,17 @@ use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
 use crate::tasks::state_machine::{
     OffState, STATE_MACHINE_EVENT_CHANNEL, SleepShutdownState, StateMachine, StateMachineEvents,
 };
-use defmt::{error, info};
+use alloc::string::String;
+use alloc::vec::Vec;
+use crc::{Crc, CRC_32_ISCSI};
+use defmt::{debug, error, info};
 use embassy_executor::task;
 use embassy_rp::peripherals::I2C0;
 use embassy_rp::{bind_interrupts, i2c, i2c_slave};
+use postcard_bindgen::PostcardBindings;
+use serde::{Deserialize, Serialize};
+
+use super::flash_writer::FLASH_WRITER_STATUS;
 
 // Following commands are supported by the I2C secondary interface:
 // - Read 0x01: Query legacy hardware version
@@ -46,6 +54,7 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Read 0x23: Query MCU temperature
 // - Write 0x30: [ANY]: Initiate shutdown
 // - Write 0x31: [ANY]: Initiate sleep shutdown
+// - Write 0x40: [NN]: Send flash update command
 
 const I2C_ADDR: u8 = 0x6d;
 
@@ -58,6 +67,159 @@ const HW_VERSION: [u8; 4] = [3, 0, 0, 0x02];
 bind_interrupts!(struct Irqs {
     I2C0_IRQ => i2c::InterruptHandler<I2C0>;
 });
+
+#[derive(Serialize, Deserialize, PostcardBindings)]
+enum FlashUpdateCommand {
+    // Initialize firmware update process
+    StartUpdate {
+        num_blocks: u32,
+        total_size: u32,
+        expected_crc32: u32,
+    },
+
+    // Upload a block of firmware data
+    UploadBlock {
+        block_num: u32,
+        data: Vec<u8>,
+        block_crc: u32,
+    },
+
+    // Query overall update status
+    GetStatus,
+
+    // Commit the uploaded firmware
+    CommitUpdate,
+
+    // Abort the update process
+    AbortUpdate,
+}
+
+#[derive(Serialize, Deserialize, PostcardBindings)]
+enum FlashUpdateResponse {
+    // Acknowledgment of received block (CRC verified)
+    BlockReceived {
+        success: bool,
+        error_code: Option<u8>,
+    },
+
+    // Status response including write queue state
+    Status {
+        state: FlashUpdateState,
+        blocks_written: u32,
+        ready_for_more: bool,
+        error_details: Option<String>,
+    },
+
+    // Acknowledgment of command
+    Ack {
+        success: bool,
+        error_code: Option<u8>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, PostcardBindings)]
+pub enum FlashUpdateState {
+    Idle,
+    Updating,
+    ReadyToCommit,
+    WriteError,
+    DataError,
+    Complete,
+}
+
+async fn render_status_response() -> Vec<u8> {
+    let flash_writer_status = FLASH_WRITER_STATUS.lock().await;
+    let state = flash_writer_status.state;
+    let blocks_written = flash_writer_status.blocks_received;
+    let ready_for_more = !FLASH_WRITE_REQUEST_CHANNEL.is_full();
+    let error_details = flash_writer_status.error_details.clone();
+
+    let response = FlashUpdateResponse::Status {
+        state,
+        blocks_written,
+        ready_for_more,
+        error_details,
+    };
+
+    let crc = Crc::<u32>::new(&CRC_32_ISCSI);
+    let digest = crc.digest();
+    postcard::to_allocvec_crc32(&response, digest).unwrap()
+}
+
+fn render_ack_response(success: bool, error_code: Option<u8>) -> Vec<u8> {
+    let response = FlashUpdateResponse::Ack {
+        success,
+        error_code,
+    };
+
+    let crc = Crc::<u32>::new(&CRC_32_ISCSI);
+    let digest = crc.digest();
+    postcard::to_allocvec_crc32(&response, digest).unwrap()
+}
+
+async fn handle_flash_update_command(buffer: &[u8]) -> Result<Vec<u8>, String> {
+    let crc = Crc::<u32>::new(&CRC_32_ISCSI);
+    let digest = crc.digest();
+    let result = postcard::from_bytes_crc32(buffer, digest);
+    let command: FlashUpdateCommand = match result {
+        Ok(command) => command,
+        Err(e) => {
+            error!("Failed to parse command: {:?}", defmt::Debug2Format(&e));
+            return Err("Failed to parse command".into());
+        }
+    };
+
+    match command {
+        FlashUpdateCommand::StartUpdate { num_blocks, total_size, expected_crc32 } => {
+            info!("Starting firmware update: total size = {}, expected CRC32 = {}", total_size, expected_crc32);
+            // FIXME: Handle expected CRC32 check
+            FLASH_WRITE_REQUEST_CHANNEL
+                .send(FlashWriteRequest::StartUpdate {
+                    num_blocks,
+                    total_size,
+                })
+                .await;
+            // Send acknowledgment
+            let digest = crc.digest();
+            let response = FlashUpdateResponse::Ack {
+                success: true,
+                error_code: None,
+            };
+            let response_bytes: Vec<u8> = postcard::to_allocvec_crc32(&response, digest).unwrap();
+            Ok(response_bytes)
+        }
+        FlashUpdateCommand::UploadBlock { block_num, data, block_crc } => {
+            info!("Uploading block: block_num = {}, block CRC = {}", block_num, block_crc);
+            FLASH_WRITE_REQUEST_CHANNEL
+                .send(FlashWriteRequest::WriteBlock {
+                    block_num,
+                    data,
+                })
+                .await;
+            // Send acknowledgment
+            Ok(render_ack_response(true, None))
+        }
+        FlashUpdateCommand::GetStatus => {
+            info!("Getting update status");
+            let response = render_status_response().await;
+            Ok(response)
+        }
+        FlashUpdateCommand::CommitUpdate => {
+            info!("Committing firmware update");
+            FLASH_WRITE_REQUEST_CHANNEL
+                .send(FlashWriteRequest::Commit)
+                .await;
+            Ok(render_ack_response(true, None))
+        }
+        FlashUpdateCommand::AbortUpdate => {
+            info!("Aborting firmware update");
+            FLASH_WRITE_REQUEST_CHANNEL
+                .send(FlashWriteRequest::Abort)
+                .await;
+            Ok(render_ack_response(true, None))
+        }
+    }
+}
 
 #[task]
 pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
@@ -72,7 +234,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
 
     loop {
         // Handle I2C secondary (slave) communication
-        let mut buf = [0u8; 128];
+        let mut buf = [0u8; 5000];
         match device.listen(&mut buf).await {
             Ok(i2c_slave::Command::GeneralCall(len)) => {
                 // Handle general call write
@@ -143,7 +305,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             // Need exactly 3 bytes for the threshold value
                             error!("Invalid power-on threshold command length");
                         } else {
-                            let cthreshold = u16::from_be_bytes([buf[2], buf[1]]);
+                            let cthreshold = u16::from_be_bytes([buf[1], buf[2]]);
                             let threshold: f32 = cthreshold as f32 / 100.0; // Convert to millivolts (0.01*NN V)
                             info!("Setting power-on threshold to {} V", threshold);
                             set_vscap_power_on_threshold(threshold).await;
@@ -155,7 +317,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             // Need exactly 3 bytes for the threshold value
                             error!("Invalid power-off threshold command length");
                         } else {
-                            let cthreshold = u16::from_be_bytes([buf[2], buf[1]]);
+                            let cthreshold = u16::from_be_bytes([buf[1], buf[2]]);
                             let threshold: f32 = cthreshold as f32 / 100.0; // Convert to millivolts (0.01*NN V)
                             info!("Setting power-off threshold to {} V", threshold);
                             set_vscap_power_off_threshold(threshold).await;
@@ -239,7 +401,9 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     // Query power-off threshold voltage
                     0x14 => {
                         let threshold = get_vscap_power_off_threshold().await;
+                        debug!("power off threshold: {}", threshold);
                         let threshold_centi = (100.0 * threshold) as u16; // Convert to centivolt
+                        debug!("power off threshold centi: {}", threshold_centi);
                         let msb_bytes = threshold_centi.to_be_bytes();
                         match device.respond_and_fill(&msb_bytes, 0x00).await {
                             Ok(read_status) => info!("response read status {}", read_status),
@@ -313,6 +477,19 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             Ok(read_status) => info!("response read status {}", read_status),
                             Err(e) => error!("error while responding {}", e),
                         }
+                    }
+                    // Flash update command
+                    0x40 => {
+                        let result = handle_flash_update_command(&buf[1..len]).await;
+                        let response = match result {
+                            Ok(response) => response,
+                            Err(_) => render_ack_response(false, Some(1)),
+                        };
+                        match device.respond_and_fill(&response, 0x00).await {
+                            Ok(read_status) => info!("response read status {}", read_status),
+                            Err(e) => error!("error while responding {}", e),
+                        }
+
                     }
                     x => error!("Invalid Write Read command: 0x{:02x}", x),
                 }

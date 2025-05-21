@@ -26,11 +26,12 @@ pub const HOST_WATCHDOG_TIMEOUT_CONFIG_KEY: u16 = 0x1006; // Key for the watchdo
 pub const HOST_WATCHDOG_REBOOT_DURATION_MS: u32 = 2000; // ms
 
 pub const FLASH_SIZE: usize = 4 * 1024 * 1024;
-pub const FLASH_CONFIG_OFFSET: u32 = 256 * 1024; // Offset for the config data in flash
-pub const FLASH_CONFIG_SIZE: u32 = 64 * 1024; // Size of the config data in flash
 
 pub const LED_BRIGHTNESS_CONFIG_KEY: u16 = 0x1001;
 pub const DEFAULT_LED_BRIGHTNESS: u8 = 0xFF; // Default brightness value
 
 pub const MIN_TEMPERATURE_VALUE: f32 = 274.15 - 40.0; // Minimum temperature value
 pub const MAX_TEMPERATURE_VALUE: f32 = 274.15 + 100.0; // Maximum temperature value
+
+pub const MAX_FLASH_WRITE_QUEUE_DEPTH: u8 = 4; // Adjust based on available RAM
+pub const FLASH_WRITE_BLOCK_SIZE: usize = 4096;

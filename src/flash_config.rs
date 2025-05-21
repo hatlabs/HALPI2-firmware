@@ -1,9 +1,5 @@
-use alloc::string::{String, ToString};
-use core::ops::Range;
 use defmt::{debug, info};
 use embassy_executor::task;
-use embassy_rp::flash::{Async, Flash};
-use embassy_rp::peripherals::FLASH;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel;
 use embassy_sync::mutex::Mutex;
@@ -12,7 +8,8 @@ use sequential_storage::cache::NoCache;
 use sequential_storage::map::{SerializationError, fetch_item, remove_item, store_item};
 use serde::{Deserialize, Serialize};
 
-use crate::config::*;
+use crate::{config::*, OM_FLASH};
+use crate::flash_layout::get_bootloader_appdata_range;
 
 // Define a comprehensive error type
 #[derive(Debug)]
@@ -55,34 +52,31 @@ pub type ConfigManagerChannelType =
 pub static CONFIG_MANAGER_EVENT_CHANNEL: ConfigManagerChannelType = channel::Channel::new();
 
 // Configuration manager using sequential-storage
-pub struct ConfigManager<'a> {
-    flash: Flash<'a, FLASH, Async, FLASH_SIZE>,
-    flash_range: Range<u32>,
+pub struct ConfigManager {
     data_buffer: [u8; 128],
 }
 
-impl<'a> ConfigManager<'a> {
-    fn new(flash: Flash<'a, FLASH, Async, FLASH_SIZE>, offset: u32, size: u32) -> Self {
-        let flash_range = offset..(offset + size);
+impl ConfigManager {
+    fn new() -> Self {
         let data_buffer = [0u8; 128];
 
         Self {
-            flash,
-            flash_range,
             data_buffer,
         }
     }
 
     /// Store a serializable value
-    pub async fn set<T: Serialize>(&mut self, key: u16, value: &T) -> Result<(), ConfigError>
+    pub async fn set<T>(&mut self, key: u16, value: &T) -> Result<(), ConfigError>
     where
         T: for<'de> Deserialize<'de> + Serialize + for<'b> sequential_storage::map::Value<'b>,
     {
         debug!("Storing item with key: {}", key);
 
+        let mut flash = OM_FLASH.get().await.lock().await;
+
         store_item(
-            &mut self.flash,
-            self.flash_range.clone(),
+            &mut *flash,
+            get_bootloader_appdata_range(),
             &mut NoCache::new(),
             &mut self.data_buffer,
             &key,
@@ -100,9 +94,11 @@ impl<'a> ConfigManager<'a> {
     {
         debug!("Fetching item with key: {}", key);
 
+        let mut flash = OM_FLASH.get().await.lock().await;
+
         fetch_item(
-            &mut self.flash,
-            self.flash_range.clone(),
+            &mut *flash,
+            get_bootloader_appdata_range(),
             &mut NoCache::new(),
             &mut self.data_buffer,
             &key,
@@ -113,9 +109,10 @@ impl<'a> ConfigManager<'a> {
 
     // Check if a key exists
     pub async fn contains_key(&mut self, key: u16) -> Result<bool, ConfigError> {
+        let mut flash = OM_FLASH.get().await.lock().await;
         let result = fetch_item::<u16, Option<bool>, _>(
-            &mut self.flash,
-            self.flash_range.clone(),
+            &mut *flash,
+            get_bootloader_appdata_range(),
             &mut NoCache::new(),
             &mut self.data_buffer,
             &key,
@@ -128,9 +125,10 @@ impl<'a> ConfigManager<'a> {
 
     // Remove a key
     pub async fn remove(&mut self, key: u16) -> Result<(), ConfigError> {
+        let mut flash = OM_FLASH.get().await.lock().await;
         remove_item(
-            &mut self.flash,
-            self.flash_range.clone(),
+            &mut *flash,
+            get_bootloader_appdata_range(),
             &mut NoCache::new(),
             &mut self.data_buffer,
             &key,
@@ -140,7 +138,7 @@ impl<'a> ConfigManager<'a> {
     }
 }
 
-pub static CONFIG_MANAGER: OnceLock<Mutex<CriticalSectionRawMutex, ConfigManager<'static>>> =
+pub static CONFIG_MANAGER: OnceLock<Mutex<CriticalSectionRawMutex, ConfigManager>> =
     OnceLock::new();
 
 /// Runtime configuration values, read from the flash storage and stored here
@@ -251,10 +249,8 @@ pub async fn set_led_brightness(value: u8) {
         .await;
 }
 
-pub async fn init_config_manager(
-    flash: embassy_rp::flash::Flash<'static, FLASH, Async, FLASH_SIZE>,
-) {
-    let config_manager = ConfigManager::new(flash, FLASH_CONFIG_OFFSET, FLASH_CONFIG_SIZE);
+pub async fn init_config_manager<'a>() {
+    let config_manager = ConfigManager::new();
     if CONFIG_MANAGER.init(Mutex::new(config_manager)).is_err() {
         // Handle the error appropriately, e.g., log it or panic
         panic!("Failed to initialize CONFIG_MANAGER");
@@ -355,6 +351,5 @@ pub async fn config_manager_task() {
                     .unwrap();
             }
         }
-
     }
 }
