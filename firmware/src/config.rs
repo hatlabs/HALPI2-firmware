@@ -35,3 +35,5 @@ pub const MAX_TEMPERATURE_VALUE: f32 = 274.15 + 100.0; // Maximum temperature va
 
 pub const MAX_FLASH_WRITE_QUEUE_DEPTH: u8 = 4; // Adjust based on available RAM
 pub const FLASH_WRITE_BLOCK_SIZE: usize = 4096;
+
+pub const FIRMWARE_MARK_BOOTED_DELAY_MS: u32 = 30_000; // Delay before marking firmware as booted

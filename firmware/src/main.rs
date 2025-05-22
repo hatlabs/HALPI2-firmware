@@ -3,12 +3,10 @@
 
 extern crate alloc;
 
-use core::cell::RefCell;
-
 use config::FLASH_SIZE;
-use embassy_rp::{flash::{self, Async}, watchdog::Watchdog};
+use embassy_rp::{flash::{Async}, watchdog::Watchdog};
 use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    blocking_mutex::raw::{NoopRawMutex},
     mutex::Mutex,
     once_lock::OnceLock,
 };
@@ -22,8 +20,6 @@ use config_manager::init_config_manager;
 use defmt::{debug, error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use tasks::led_blinker::LED_BLINKER_EVENT_CHANNEL;
-use tasks::power_button::POWER_BUTTON_EVENT_CHANNEL;
 use {defmt_rtt as _, panic_probe as _};
 
 mod config;
@@ -43,6 +39,25 @@ pub type FlashType<'a> =
     embassy_rp::flash::Flash<'a, embassy_rp::peripherals::FLASH, Async, FLASH_SIZE>;
 pub type MFlashType<'a> = Mutex<NoopRawMutex, FlashType<'a>>;
 pub static OM_FLASH: OnceLock<MFlashType<'static>> = OnceLock::new();
+
+#[embassy_executor::task]
+async fn mark_firmware_booted_task() {
+    // Wait for 30 seconds to ensure the firmware is stable and then
+    // mark it as booted, preventing the bootloader from reverting
+    // to the previous firmware on the next boot.
+    Timer::after(Duration::from_millis(config::FIRMWARE_MARK_BOOTED_DELAY_MS as u64)).await;
+
+    let flash = OM_FLASH.get().await;
+    let config = embassy_boot::FirmwareUpdaterConfig::from_linkerfile(flash, flash);
+    let mut aligned = embassy_boot::AlignedBuffer([0; 1]);
+    let mut updater = embassy_boot::FirmwareUpdater::new(config, &mut aligned.0);
+
+    let bootloader_state = updater.get_state().await.unwrap();
+    if bootloader_state == embassy_boot::State::Swap {
+        info!("Marking firmware as booted");
+        updater.mark_booted().await.unwrap();
+    }
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -131,6 +146,10 @@ async fn main(spawner: Spawner) {
     //spawner
     //    .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
     //    .unwrap();
+
+    spawner
+        .spawn(mark_firmware_booted_task())
+        .unwrap();
 
     // Main task can handle other initialization or remain idle
     loop {
