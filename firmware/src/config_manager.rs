@@ -8,8 +8,8 @@ use sequential_storage::cache::NoCache;
 use sequential_storage::map::{SerializationError, fetch_item, remove_item, store_item};
 use serde::{Deserialize, Serialize};
 
-use crate::{config::*, OM_FLASH};
 use crate::flash_layout::get_bootloader_appdata_range;
+use crate::{OM_FLASH, config::*};
 
 // Define a comprehensive error type
 #[derive(Debug)]
@@ -136,6 +136,14 @@ impl ConfigManager {
         .await
         .map_err(ConfigError::from)
     }
+
+    // Erase the entire flash range
+    pub async fn erase(&mut self) -> Result<(), ConfigError> {
+        let mut flash = OM_FLASH.get().await.lock().await;
+        sequential_storage::erase_all(&mut *flash, get_bootloader_appdata_range())
+            .await
+            .map_err(ConfigError::from)
+    }
 }
 
 pub static CONFIG_MANAGER: OnceLock<Mutex<CriticalSectionRawMutex, ConfigManager>> =
@@ -249,7 +257,7 @@ pub async fn set_led_brightness(value: u8) {
         .await;
 }
 
-pub async fn init_config_manager<'a>() {
+pub async fn init_config_manager() {
     let config_manager = ConfigManager::new();
     if CONFIG_MANAGER.init(Mutex::new(config_manager)).is_err() {
         // Handle the error appropriately, e.g., log it or panic

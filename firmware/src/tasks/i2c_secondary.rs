@@ -3,7 +3,7 @@ use crate::config::{
     VIN_MAX_VALUE, VSCAP_MAX_VALUE,
 };
 use crate::config_resources::I2CSecondaryResources;
-use crate::flash_config::{
+use crate::config_manager::{
     get_vscap_power_off_threshold, get_vscap_power_on_threshold, set_vscap_power_off_threshold,
     set_vscap_power_on_threshold,
 };

@@ -6,9 +6,11 @@ extern crate alloc;
 use core::cell::RefCell;
 
 use config::FLASH_SIZE;
-use embassy_rp::flash::{self, Async};
+use embassy_rp::{flash::{self, Async}, watchdog::Watchdog};
 use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex}, mutex::Mutex, once_lock::OnceLock,
+    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    mutex::Mutex,
+    once_lock::OnceLock,
 };
 use embedded_alloc::LlffHeap as Heap;
 
@@ -16,17 +18,17 @@ use embedded_alloc::LlffHeap as Heap;
 static HEAP: Heap = Heap::empty();
 const HEAP_SIZE: usize = 65536; // 64kB
 
+use config_manager::init_config_manager;
 use defmt::{debug, error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use flash_config::init_config_manager;
 use tasks::led_blinker::LED_BLINKER_EVENT_CHANNEL;
 use tasks::power_button::POWER_BUTTON_EVENT_CHANNEL;
 use {defmt_rtt as _, panic_probe as _};
 
 mod config;
+mod config_manager;
 mod config_resources;
-mod flash_config;
 mod flash_layout;
 mod led_patterns;
 mod tasks;
@@ -37,13 +39,9 @@ use crate::config_resources::{
     StateMachineOutputResources, TestModeResources, UserButtonInputResources,
 };
 
-pub type FlashType<'a> = embassy_rp::flash::Flash<
-    'a,
-    embassy_rp::peripherals::FLASH,
-    Async,
-    FLASH_SIZE,
->;
-pub type MFlashType<'a> = Mutex<NoopRawMutex,FlashType<'a>>;
+pub type FlashType<'a> =
+    embassy_rp::flash::Flash<'a, embassy_rp::peripherals::FLASH, Async, FLASH_SIZE>;
+pub type MFlashType<'a> = Mutex<NoopRawMutex, FlashType<'a>>;
 pub static OM_FLASH: OnceLock<MFlashType<'static>> = OnceLock::new();
 
 #[embassy_executor::main]
@@ -60,8 +58,14 @@ async fn main(spawner: Spawner) {
 
     info!("Starting up...");
 
+    // Override bootloader watchdog
+    let mut watchdog = Watchdog::new(p.WATCHDOG);
+    watchdog.start(Duration::from_secs(8));
+
     // Initialize the config manager
-    let flash = embassy_rp::flash::Flash::<embassy_rp::peripherals::FLASH, Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH1);
+    let flash = embassy_rp::flash::Flash::<embassy_rp::peripherals::FLASH, Async, FLASH_SIZE>::new(
+        p.FLASH, p.DMA_CH1,
+    );
     let flash: MFlashType = Mutex::<NoopRawMutex, _>::new(flash);
 
     if OM_FLASH.init(flash).is_err() {
@@ -131,6 +135,8 @@ async fn main(spawner: Spawner) {
     // Main task can handle other initialization or remain idle
     loop {
         Timer::after(Duration::from_secs(1)).await;
+
+        watchdog.feed();
 
         let inputs = tasks::gpio_input::INPUTS.lock().await;
         debug!(

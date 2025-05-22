@@ -19,7 +19,7 @@ use smart_leds::{RGB8, brightness, gamma};
 
 use crate::config::{LED_BRIGHTNESS_CONFIG_KEY, DEFAULT_LED_BRIGHTNESS};
 use crate::config_resources::RGBLEDResources;
-use crate::flash_config::CONFIG_MANAGER;
+use crate::config_manager::CONFIG_MANAGER;
 
 const NUM_LEDS: usize = 5;
 
