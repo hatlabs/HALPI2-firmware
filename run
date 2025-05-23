@@ -11,7 +11,7 @@
 ################################################################################
 # Project-specific commands follow.
 
-function gen-bindings {
+function generate-bindings {
   cargo +nightly run -p gen-bindings --target $(rustc -vV | sed -n 's|host: ||p')
 }
 
@@ -25,16 +25,35 @@ function build {
   cargo build $@
 }
 
-function upload {
+function run {
+  # Run the project.
   cargo run $@
 }
 
+function upload {
+  cargo flash --chip RP2040 $@
+}
+
+function flash {
+  # Alias for upload.
+  upload $@
+}
+
 function monitor {
-  probe-rs attach --chip RP2040 target/thumbv6m-none-eabi/debug/halpi2-rs-firmware
+  probe-rs attach --chip RP2040 target/thumbv6m-none-eabi/debug/halpi2-rs-firmware $@
 }
 
 function attach {
-  monitor
+  monitor $@
+}
+
+function build-bootloader {
+  cargo build -p bootloader --release $@
+}
+
+function flash-bootloader {
+  # Flash the bootloader.
+  cargo flash --chip RP2040 --release -p bootloader $@
 }
 
 ################################################################################
