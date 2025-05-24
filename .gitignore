@@ -1,3 +1,4 @@
 # Cargo build artifacts
 /target/
 **/.idea
+halpi2-fw-i2c-postcard/
