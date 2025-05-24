@@ -27,7 +27,3 @@ defmt = [
     "embassy-boot-rp/defmt",
     "embassy-rp/defmt",
 ]
-
-[profile.release]
-debug = true
-opt-level = 's'
