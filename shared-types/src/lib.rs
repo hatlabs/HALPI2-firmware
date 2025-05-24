@@ -6,10 +6,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
-use postcard_bindgen::PostcardBindings;
 
 
-#[derive(Serialize, Deserialize, PostcardBindings)]
+#[cfg_attr(feature = "bindgen", derive(postcard_bindgen::PostcardBindings))]
+#[derive(Serialize, Deserialize)]
 pub enum FlashUpdateCommand {
     // Initialize firmware update process
     StartUpdate {
@@ -35,7 +35,8 @@ pub enum FlashUpdateCommand {
     AbortUpdate,
 }
 
-#[derive(Serialize, Deserialize, PostcardBindings)]
+#[cfg_attr(feature = "bindgen", derive(postcard_bindgen::PostcardBindings))]
+#[derive(Serialize, Deserialize)]
 pub enum FlashUpdateResponse {
     // Acknowledgment of received block (CRC verified)
     BlockReceived {
@@ -58,7 +59,8 @@ pub enum FlashUpdateResponse {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, PostcardBindings)]
+#[cfg_attr(feature = "bindgen", derive(postcard_bindgen::PostcardBindings))]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum FlashUpdateState {
     Idle,
     Updating,
