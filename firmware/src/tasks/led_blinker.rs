@@ -3,12 +3,12 @@ use core::fmt;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use defmt::{debug, info};
+use defmt::{debug, error, info};
 use embassy_executor::task;
 use embassy_rp::bind_interrupts;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::{self, Receiver};
+use embassy_sync::channel;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker};
 
@@ -17,9 +17,9 @@ use embassy_rp::pio::{Instance, InterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
 use smart_leds::{RGB8, brightness, gamma};
 
-use crate::config::{LED_BRIGHTNESS_CONFIG_KEY, DEFAULT_LED_BRIGHTNESS};
-use crate::config_resources::RGBLEDResources;
+use crate::config::{DEFAULT_LED_BRIGHTNESS, LED_BRIGHTNESS_CONFIG_KEY};
 use crate::config_manager::CONFIG_MANAGER;
+use crate::config_resources::RGBLEDResources;
 
 const NUM_LEDS: usize = 5;
 
@@ -146,7 +146,7 @@ impl Colors {
 
 impl LEDPatternFragment for Colors {
     fn duration_ms(&self) -> u32 {
-        1000
+        self.duration_ms
     }
 
     fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
@@ -301,7 +301,13 @@ pub async fn set_led_brightness(brightness: u8) {
     let mut config_manager = CONFIG_MANAGER.get().await.lock().await;
     config_manager
         .set(LED_BRIGHTNESS_CONFIG_KEY, &brightness)
-        .await;
+        .await
+        .unwrap_or_else(|e| {
+            error!(
+                "Failed to set LED brightness in config manager: {}",
+                defmt::Debug2Format(&e)
+            );
+        });
 
     LED_BLINKER_EVENT_CHANNEL
         .send(LEDBlinkerEvents::SetBrightness(brightness))

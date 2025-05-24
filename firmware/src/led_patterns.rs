@@ -1,6 +1,5 @@
 use alloc::boxed::Box;
 use alloc::vec;
-use smart_leds::RGB8;
 use smart_leds::colors::*;
 
 use crate::tasks::led_blinker::*;

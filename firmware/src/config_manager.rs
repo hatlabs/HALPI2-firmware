@@ -15,14 +15,14 @@ use crate::{OM_FLASH, config::*};
 #[derive(Debug)]
 pub enum ConfigError {
     // Flash operation errors
-    Flash(embassy_rp::flash::Error),
+    Flash(()),
     // Other storage errors
     Storage,
 }
 
 impl From<embassy_rp::flash::Error> for ConfigError {
     fn from(error: embassy_rp::flash::Error) -> Self {
-        ConfigError::Flash(error)
+        ConfigError::Flash(())
     }
 }
 
