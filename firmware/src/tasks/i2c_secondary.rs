@@ -1,13 +1,13 @@
+use super::flash_writer::FLASH_WRITER_STATUS;
 use crate::config::{
-    IIN_MAX_VALUE, MAX_TEMPERATURE_VALUE, MIN_TEMPERATURE_VALUE,
-    VIN_MAX_VALUE, VSCAP_MAX_VALUE,
+    IIN_MAX_VALUE, MAX_TEMPERATURE_VALUE, MIN_TEMPERATURE_VALUE, VIN_MAX_VALUE, VSCAP_MAX_VALUE,
 };
-use crate::config_resources::I2CSecondaryResources;
 use crate::config_manager::{
     get_vscap_power_off_threshold, get_vscap_power_on_threshold, set_vscap_power_off_threshold,
     set_vscap_power_on_threshold,
 };
-use crate::tasks::flash_writer::{FlashWriteRequest, FLASH_WRITE_REQUEST_CHANNEL};
+use crate::config_resources::I2CSecondaryResources;
+use crate::tasks::flash_writer::{FLASH_WRITE_REQUEST_CHANNEL, FlashWriteRequest};
 use crate::tasks::gpio_input::INPUTS;
 use crate::tasks::host_watchdog::{
     HOST_WATCHDOG_EVENT_CHANNEL, HostWatchdogEvents, get_host_watchdog_timeout_ms,
@@ -19,16 +19,16 @@ use crate::tasks::state_machine::{
 };
 use alloc::string::String;
 use alloc::vec::Vec;
-use crc::{Crc, CRC_32_ISCSI};
+use crc::{CRC_32_ISCSI, Crc};
 use defmt::{debug, error, info};
 use embassy_executor::task;
-use embassy_rp::peripherals::I2C0;
+use embassy_rp::peripherals::I2C1;
 use embassy_rp::{bind_interrupts, i2c, i2c_slave};
-use super::flash_writer::FLASH_WRITER_STATUS;
 
-use shared_types::{
-    FlashUpdateCommand, FlashUpdateResponse, FlashUpdateState,
-};
+const ACK_ERROR_INVALID_COMMAND: u8 = 1; // Error code for invalid command
+const ACK_ERROR_QUEUE_FULL: u8 = 2; // Error code for queue full
+
+use shared_types::{FlashUpdateCommand, FlashUpdateResponse, FlashUpdateState};
 
 // Following commands are supported by the I2C secondary interface:
 // - Read 0x01: Query legacy hardware version
@@ -66,7 +66,7 @@ const FW_VERSION: [u8; 4] = [3, 0, 0, 0x01];
 const HW_VERSION: [u8; 4] = [3, 0, 0, 0x02];
 
 bind_interrupts!(struct Irqs {
-    I2C0_IRQ => i2c::InterruptHandler<I2C0>;
+    I2C1_IRQ => i2c::InterruptHandler<I2C1>;
 });
 
 async fn render_status_response() -> Vec<u8> {
@@ -112,8 +112,15 @@ async fn handle_flash_update_command(buffer: &[u8]) -> Result<Vec<u8>, String> {
     };
 
     match command {
-        FlashUpdateCommand::StartUpdate { num_blocks, total_size, expected_crc32 } => {
-            info!("Starting firmware update: total size = {}, expected CRC32 = {}", total_size, expected_crc32);
+        FlashUpdateCommand::StartUpdate {
+            num_blocks,
+            total_size,
+            expected_crc32,
+        } => {
+            info!(
+                "Starting firmware update: total size = {}, expected CRC32 = {}",
+                total_size, expected_crc32
+            );
             // FIXME: Handle expected CRC32 check
             FLASH_WRITE_REQUEST_CHANNEL
                 .send(FlashWriteRequest::StartUpdate {
@@ -130,13 +137,21 @@ async fn handle_flash_update_command(buffer: &[u8]) -> Result<Vec<u8>, String> {
             let response_bytes: Vec<u8> = postcard::to_allocvec_crc32(&response, digest).unwrap();
             Ok(response_bytes)
         }
-        FlashUpdateCommand::UploadBlock { block_num, data, block_crc } => {
-            info!("Uploading block: block_num = {}, block CRC = {}", block_num, block_crc);
+        FlashUpdateCommand::UploadBlock {
+            block_num,
+            data,
+            block_crc,
+        } => {
+            info!(
+                "Uploading block: block_num = {}, block CRC = {}",
+                block_num, block_crc
+            );
+            if FLASH_WRITE_REQUEST_CHANNEL.is_full() {
+                error!("Flash write request channel is full, cannot accept more blocks");
+                return Ok(render_ack_response(false, Some(ACK_ERROR_QUEUE_FULL))); // Error code 1: Channel full
+            }
             FLASH_WRITE_REQUEST_CHANNEL
-                .send(FlashWriteRequest::WriteBlock {
-                    block_num,
-                    data,
-                })
+                .send(FlashWriteRequest::WriteBlock { block_num, data })
                 .await;
             // Send acknowledgment
             Ok(render_ack_response(true, None))
@@ -425,13 +440,12 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         let result = handle_flash_update_command(&buf[1..len]).await;
                         let response = match result {
                             Ok(response) => response,
-                            Err(_) => render_ack_response(false, Some(1)),
+                            Err(_) => render_ack_response(false, Some(ACK_ERROR_INVALID_COMMAND)),
                         };
                         match device.respond_and_fill(&response, 0x00).await {
                             Ok(read_status) => info!("response read status {}", read_status),
                             Err(e) => error!("error while responding {}", e),
                         }
-
                     }
                     x => error!("Invalid Write Read command: 0x{:02x}", x),
                 }
