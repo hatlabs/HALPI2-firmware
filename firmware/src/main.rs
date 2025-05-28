@@ -4,6 +4,7 @@
 extern crate alloc;
 
 use config::FLASH_SIZE;
+use embassy_boot::AlignedBuffer;
 use embassy_rp::{flash::{Async}, watchdog::Watchdog};
 use embassy_sync::{
     blocking_mutex::raw::{NoopRawMutex},
@@ -47,15 +48,30 @@ async fn mark_firmware_booted_task() {
     // to the previous firmware on the next boot.
     Timer::after(Duration::from_millis(config::FIRMWARE_MARK_BOOTED_DELAY_MS as u64)).await;
 
+    info!("Marking firmware as booted");
+
     let flash = OM_FLASH.get().await;
+
     let config = embassy_boot::FirmwareUpdaterConfig::from_linkerfile(flash, flash);
-    let mut aligned = embassy_boot::AlignedBuffer([0; 1]);
+    let mut aligned = embassy_boot::AlignedBuffer([0; 4]);
     let mut updater = embassy_boot::FirmwareUpdater::new(config, &mut aligned.0);
 
-    let bootloader_state = updater.get_state().await.unwrap();
+    let bootloader_state_result = updater.get_state().await;
+    let bootloader_state = match bootloader_state_result {
+        Ok(state) => state,
+        Err(e) => {
+            error!("Failed to get bootloader state: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
     if bootloader_state == embassy_boot::State::Swap {
-        info!("Marking firmware as booted");
-        updater.mark_booted().await.unwrap();
+        info!("Writing bootloader state to flash");
+        let mark_result = updater.mark_booted().await;
+        if let Err(e) = mark_result {
+            error!("Failed to mark firmware as booted: {:?}", defmt::Debug2Format(&e));
+        } else {
+            info!("Firmware marked as booted successfully");
+        }
     }
 }
 
