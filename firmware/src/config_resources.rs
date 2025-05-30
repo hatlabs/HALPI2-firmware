@@ -35,7 +35,7 @@
 //| 29     | GPIO29_ADC3 | Analog: ADC channel 3 input. Unused.                           |
 
 use assign_resources::assign_resources;
-use embassy_rp::peripherals;
+use embassy_rp::{Peri, peripherals};
 
 // Version 0.3.0 pin assignments
 

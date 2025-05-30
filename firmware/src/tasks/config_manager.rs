@@ -1,4 +1,4 @@
-use defmt::{debug, info};
+use defmt::{debug, error, info};
 use embassy_executor::task;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel;
@@ -9,7 +9,7 @@ use sequential_storage::map::{SerializationError, fetch_item, remove_item, store
 use serde::{Deserialize, Serialize};
 
 use crate::flash_layout::get_bootloader_appdata_range;
-use crate::{OM_FLASH, config::*};
+use crate::{MFlashType, config::*};
 
 // Define a comprehensive error type
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub enum ConfigError {
 }
 
 impl From<embassy_rp::flash::Error> for ConfigError {
-    fn from(error: embassy_rp::flash::Error) -> Self {
+    fn from(_: embassy_rp::flash::Error) -> Self {
         ConfigError::Flash(())
     }
 }
@@ -41,6 +41,7 @@ impl From<SerializationError> for ConfigError {
 #[derive(defmt::Format)]
 pub enum ConfigManagerEvents {
     VscapPowerOnThreshold(f32),
+    VscapPowerOffThreshold(f32),
     VinPowerThreshold(f32),
     ShutdownWaitDurationMs(u32),
     WatchdogTimeoutMs(u16),
@@ -53,16 +54,15 @@ pub static CONFIG_MANAGER_EVENT_CHANNEL: ConfigManagerChannelType = channel::Cha
 
 // Configuration manager using sequential-storage
 pub struct ConfigManager {
+    flash: &'static MFlashType<'static>,
     data_buffer: [u8; 128],
 }
 
 impl ConfigManager {
-    fn new() -> Self {
+    fn new(flash: &'static MFlashType<'static>) -> Self {
         let data_buffer = [0u8; 128];
 
-        Self {
-            data_buffer,
-        }
+        Self { flash, data_buffer }
     }
 
     /// Store a serializable value
@@ -72,9 +72,9 @@ impl ConfigManager {
     {
         debug!("Storing item with key: {}", key);
 
-        let mut flash = OM_FLASH.get().await.lock().await;
+        let mut flash = self.flash.lock().await;
 
-        store_item(
+        let result = store_item(
             &mut *flash,
             get_bootloader_appdata_range(),
             &mut NoCache::new(),
@@ -82,11 +82,25 @@ impl ConfigManager {
             &key,
             value,
         )
-        .await
-        .map_err(ConfigError::from)
+        .await;
+
+        match result {
+            Ok(_) => {
+                debug!("Item stored successfully with key: {}", key);
+                Ok(())
+            }
+            Err(e) => {
+                error!(
+                    "Failed to store item with key: {}: {}",
+                    key,
+                    defmt::Debug2Format(&e)
+                );
+                Err(ConfigError::from(e))
+            }
+        }
     }
 
-    // Retrieve a deserialized value or None if not found
+    // Retrieve a value or None if not found
     // Modified to remove the lifetime dependency on self
     pub async fn get<T>(&mut self, key: u16) -> Result<Option<T>, ConfigError>
     where
@@ -94,22 +108,41 @@ impl ConfigManager {
     {
         debug!("Fetching item with key: {}", key);
 
-        let mut flash = OM_FLASH.get().await.lock().await;
+        let mut flash = self.flash.lock().await;
 
-        fetch_item(
+        let result = fetch_item(
             &mut *flash,
             get_bootloader_appdata_range(),
             &mut NoCache::new(),
             &mut self.data_buffer,
             &key,
         )
-        .await
-        .map_err(ConfigError::from)
+        .await;
+
+        match result {
+            Ok(Some(value)) => {
+                debug!("Item fetched successfully with key: {}", key);
+                Ok(Some(value))
+            }
+            Ok(None) => {
+                debug!("No item found with key: {}", key);
+                Ok(None)
+            }
+            Err(e) => {
+                error!(
+                    "Failed to fetch item with key: {}: {}",
+                    key,
+                    defmt::Debug2Format(&e)
+                );
+                Err(ConfigError::from(e))
+            }
+        }
     }
 
     // Check if a key exists
+    #[allow(dead_code)]
     pub async fn contains_key(&mut self, key: u16) -> Result<bool, ConfigError> {
-        let mut flash = OM_FLASH.get().await.lock().await;
+        let mut flash = self.flash.lock().await;
         let result = fetch_item::<u16, Option<bool>, _>(
             &mut *flash,
             get_bootloader_appdata_range(),
@@ -124,8 +157,9 @@ impl ConfigManager {
     }
 
     // Remove a key
+    #[allow(dead_code)]
     pub async fn remove(&mut self, key: u16) -> Result<(), ConfigError> {
-        let mut flash = OM_FLASH.get().await.lock().await;
+        let mut flash = self.flash.lock().await;
         remove_item(
             &mut *flash,
             get_bootloader_appdata_range(),
@@ -138,16 +172,14 @@ impl ConfigManager {
     }
 
     // Erase the entire flash range
+    #[allow(dead_code)]
     pub async fn erase(&mut self) -> Result<(), ConfigError> {
-        let mut flash = OM_FLASH.get().await.lock().await;
+        let mut flash = self.flash.lock().await;
         sequential_storage::erase_all(&mut *flash, get_bootloader_appdata_range())
             .await
             .map_err(ConfigError::from)
     }
 }
-
-pub static CONFIG_MANAGER: OnceLock<Mutex<CriticalSectionRawMutex, ConfigManager>> =
-    OnceLock::new();
 
 /// Runtime configuration values, read from the flash storage and stored here
 /// to prevent multiple reads from the flash.
@@ -198,14 +230,17 @@ pub async fn get_vscap_power_off_threshold() -> f32 {
     let config = RUNTIME_CONFIG.lock().await;
     config.vscap_power_off_threshold
 }
+#[allow(dead_code)]
 pub async fn get_vin_power_threshold() -> f32 {
     let config = RUNTIME_CONFIG.lock().await;
     config.vin_power_threshold
 }
+#[allow(dead_code)]
 pub async fn get_shutdown_wait_duration_ms() -> u32 {
     let config = RUNTIME_CONFIG.lock().await;
     config.shutdown_wait_duration_ms
 }
+#[allow(dead_code)]
 pub async fn get_watchdog_timeout_ms() -> u16 {
     let config = RUNTIME_CONFIG.lock().await;
     config.watchdog_timeout_ms
@@ -225,9 +260,10 @@ pub async fn set_vscap_power_off_threshold(value: f32) {
     let mut config = RUNTIME_CONFIG.lock().await;
     config.vscap_power_off_threshold = value;
     CONFIG_MANAGER_EVENT_CHANNEL
-        .send(ConfigManagerEvents::VscapPowerOnThreshold(value))
+        .send(ConfigManagerEvents::VscapPowerOffThreshold(value))
         .await;
 }
+#[allow(dead_code)]
 pub async fn set_vin_power_threshold(value: f32) {
     let mut config = RUNTIME_CONFIG.lock().await;
     config.vin_power_threshold = value;
@@ -235,6 +271,7 @@ pub async fn set_vin_power_threshold(value: f32) {
         .send(ConfigManagerEvents::VinPowerThreshold(value))
         .await;
 }
+#[allow(dead_code)]
 pub async fn set_shutdown_wait_duration_ms(value: u32) {
     let mut config = RUNTIME_CONFIG.lock().await;
     config.shutdown_wait_duration_ms = value;
@@ -242,6 +279,7 @@ pub async fn set_shutdown_wait_duration_ms(value: u32) {
         .send(ConfigManagerEvents::ShutdownWaitDurationMs(value))
         .await;
 }
+#[allow(dead_code)]
 pub async fn set_watchdog_timeout_ms(value: u16) {
     let mut config = RUNTIME_CONFIG.lock().await;
     config.watchdog_timeout_ms = value;
@@ -257,62 +295,70 @@ pub async fn set_led_brightness(value: u8) {
         .await;
 }
 
-pub async fn init_config_manager() {
-    let config_manager = ConfigManager::new();
-    if CONFIG_MANAGER.init(Mutex::new(config_manager)).is_err() {
-        // Handle the error appropriately, e.g., log it or panic
-        panic!("Failed to initialize CONFIG_MANAGER");
-    }
+pub async fn init_config_manager(
+    flash: &'static MFlashType<'static>,
+) -> Mutex<CriticalSectionRawMutex, ConfigManager> {
+    let config_manager_mutex =
+        Mutex::<CriticalSectionRawMutex, ConfigManager>::new(ConfigManager::new(flash));
     info!("Config manager initialized");
 
-    let mut config_manager = CONFIG_MANAGER.get().await.lock().await;
+    {
+        let mut config_manager = config_manager_mutex.lock().await;
 
-    let vscap_power_on_threshold = config_manager
-        .get::<f32>(VSCAP_POWER_ON_THRESHOLD_CONFIG_KEY)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(DEFAULT_VSCAP_POWER_ON_THRESHOLD);
-    let vscap_power_off_threshold = config_manager
-        .get::<f32>(VSCAP_POWER_OFF_THRESHOLD_CONFIG_KEY)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(DEFAULT_VSCAP_POWER_OFF_THRESHOLD);
-    let vin_power_threshold = config_manager
-        .get::<f32>(VIN_POWER_THRESHOLD_CONFIG_KEY)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(DEFAULT_VIN_POWER_THRESHOLD);
-    let shutdown_wait_duration_ms = config_manager
-        .get::<u32>(SHUTDOWN_WAIT_DURATION_CONFIG_KEY)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(DEFAULT_SHUTDOWN_WAIT_DURATION_MS);
-    let watchdog_timeout_ms = config_manager
-        .get::<u16>(HOST_WATCHDOG_TIMEOUT_CONFIG_KEY)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(HOST_WATCHDOG_DEFAULT_TIMEOUT_MS);
-    let led_brightness = config_manager
-        .get::<u8>(LED_BRIGHTNESS_CONFIG_KEY)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(DEFAULT_LED_BRIGHTNESS);
+        let vscap_power_on_threshold = config_manager
+            .get::<f32>(VSCAP_POWER_ON_THRESHOLD_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_VSCAP_POWER_ON_THRESHOLD);
+        debug!("Received vscap power on threshold: {}", vscap_power_on_threshold);
+        let vscap_power_off_threshold = config_manager
+            .get::<f32>(VSCAP_POWER_OFF_THRESHOLD_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_VSCAP_POWER_OFF_THRESHOLD);
+        debug!("Received vscap power off threshold: {}", vscap_power_off_threshold);
+        let vin_power_threshold = config_manager
+            .get::<f32>(VIN_POWER_THRESHOLD_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_VIN_POWER_THRESHOLD);
+        debug!("Received vin power threshold: {}", vin_power_threshold);
+        let shutdown_wait_duration_ms = config_manager
+            .get::<u32>(SHUTDOWN_WAIT_DURATION_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_SHUTDOWN_WAIT_DURATION_MS);
+        debug!("Received shutdown wait duration: {}", shutdown_wait_duration_ms);
+        let watchdog_timeout_ms = config_manager
+            .get::<u16>(HOST_WATCHDOG_TIMEOUT_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(HOST_WATCHDOG_DEFAULT_TIMEOUT_MS);
+        debug!("Received watchdog timeout: {}", watchdog_timeout_ms);
+        let led_brightness = config_manager
+            .get::<u8>(LED_BRIGHTNESS_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_LED_BRIGHTNESS);
+        debug!("Received led brightness: {}", led_brightness);
 
-    let mut runtime_config = RUNTIME_CONFIG.lock().await;
-    *runtime_config = RuntimeConfig::new(
-        vscap_power_on_threshold,
-        vscap_power_off_threshold,
-        vin_power_threshold,
-        shutdown_wait_duration_ms,
-        watchdog_timeout_ms,
-        led_brightness,
-    );
+        let mut runtime_config = RUNTIME_CONFIG.lock().await;
+        runtime_config.vscap_power_on_threshold = vscap_power_on_threshold;
+        runtime_config.vscap_power_off_threshold = vscap_power_off_threshold;
+        runtime_config.vin_power_threshold = vin_power_threshold;
+        runtime_config.shutdown_wait_duration_ms = shutdown_wait_duration_ms;
+        runtime_config.watchdog_timeout_ms = watchdog_timeout_ms;
+        runtime_config.led_brightness = led_brightness;
+    }
     info!("Runtime configuration updated");
+    config_manager_mutex
 }
 
 #[task]
-pub async fn config_manager_task() {
+pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
     info!("Initializing config manager task");
+
+    let config_manager_mutex = init_config_manager(flash).await;
 
     // Flash and config manager are initialized in the main function to ensure
     // their availability for other tasks before this task runs.
@@ -325,12 +371,18 @@ pub async fn config_manager_task() {
         let event = receiver.receive().await;
         debug!("Received config manager event: {:?}", event);
 
-        let mut config_manager = CONFIG_MANAGER.get().await.lock().await;
+        let mut config_manager = config_manager_mutex.lock().await;
 
         match event {
             ConfigManagerEvents::VscapPowerOnThreshold(value) => {
                 config_manager
                     .set(VSCAP_POWER_ON_THRESHOLD_CONFIG_KEY, &value)
+                    .await
+                    .unwrap();
+            }
+            ConfigManagerEvents::VscapPowerOffThreshold(value) => {
+                config_manager
+                    .set(VSCAP_POWER_OFF_THRESHOLD_CONFIG_KEY, &value)
                     .await
                     .unwrap();
             }

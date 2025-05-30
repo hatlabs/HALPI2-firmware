@@ -11,10 +11,6 @@
 ################################################################################
 # Project-specific commands follow.
 
-function generate-bindings {
-  cargo +nightly run -p gen-bindings --target $(rustc -vV | sed -n 's|host: ||p')
-}
-
 function clean {
   # Remove all temporary files and directories.
   cargo clean
@@ -23,6 +19,14 @@ function clean {
 function build {
   # Build the project.
   cargo build $@
+}
+
+function build-binary {
+  # Build the project binary.
+  build --release
+  # Get version from Cargo.toml
+  VERSION=$(grep -m1 '^version = ' firmware/Cargo.toml | cut -d'"' -f2)
+  cargo objcopy --release -- -O binary firmware/halpi2-rs-firmware_v${VERSION}.bin
 }
 
 function run {
@@ -54,6 +58,14 @@ function build-bootloader {
 function flash-bootloader {
   # Flash the bootloader.
   cargo flash --chip RP2040 --release -p bootloader $@
+}
+
+function flash-all {
+  build-bootloader
+  build --release
+  # Flash the bootloader and the firmware.
+  flash-bootloader
+  upload
 }
 
 ################################################################################

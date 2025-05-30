@@ -2,6 +2,7 @@ use crate::led_patterns::get_state_pattern;
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
 use core::fmt::Debug;
+use cortex_m::peripheral::SCB;
 use defmt::*;
 use embassy_executor::task;
 use embassy_rp::gpio::{Level, Output};
@@ -107,10 +108,14 @@ impl ShutdownState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OffState {}
+pub struct OffState {
+    entry_time: Instant,
+}
 impl OffState {
     pub fn new() -> Self {
-        OffState {}
+        OffState {
+            entry_time: Instant::now(),
+        }
     }
 }
 
@@ -363,7 +368,10 @@ impl State for OnState {
             return Ok(StateMachine::Depleting(DepletingState::new()));
         }
         if !inputs.cm_on {
-            return Ok(StateMachine::OffNoVin(OffNoVinState {}));
+            // Host has powered off. Let's reset the MCU to allow e.g. flash
+            // partition swaps
+            SCB::sys_reset();
+            //return Ok(StateMachine::OffNoVin(OffNoVinState {}));
         }
         Ok(StateMachine::On(*self))
     }
@@ -457,6 +465,7 @@ impl State for OffState {
         // Set the LED blink pattern
         self.set_led_pattern(context, &StateMachine::Off(*self))
             .await?;
+        self.entry_time = Instant::now();
         Ok(())
     }
 
@@ -465,6 +474,12 @@ impl State for OffState {
         if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
             // Transition to OffChargingState
             return Ok(StateMachine::OffCharging(OffChargingState {}));
+        }
+
+        let now = Instant::now();
+        if now.duration_since(self.entry_time) > Duration::from_secs(5) {
+            // Reset the MCU
+            SCB::sys_reset();
         }
         Ok(StateMachine::Off(*self))
     }

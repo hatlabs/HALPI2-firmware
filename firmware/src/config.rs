@@ -33,7 +33,8 @@ pub const DEFAULT_LED_BRIGHTNESS: u8 = 0xFF; // Default brightness value
 pub const MIN_TEMPERATURE_VALUE: f32 = 274.15 - 40.0; // Minimum temperature value
 pub const MAX_TEMPERATURE_VALUE: f32 = 274.15 + 100.0; // Maximum temperature value
 
-pub const MAX_FLASH_WRITE_QUEUE_DEPTH: u8 = 4; // Adjust based on available RAM
+pub const MAX_FLASH_WRITE_QUEUE_DEPTH: usize = 4; // Adjust based on available RAM
+pub const FLASH_ERASE_BLOCK_SIZE: usize = 4096;
 pub const FLASH_WRITE_BLOCK_SIZE: usize = 4096;
 
 pub const FIRMWARE_MARK_BOOTED_DELAY_MS: u32 = 30_000; // Delay before marking firmware as booted

@@ -2,8 +2,6 @@
 resolver = "3"
 members = [
     "firmware",
-    "gen-bindings",
-    "shared-types",
     "bootloader",
 ]
 default-members = ["firmware"]

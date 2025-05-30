@@ -4,27 +4,31 @@
 extern crate alloc;
 
 use config::FLASH_SIZE;
-use embassy_boot::AlignedBuffer;
-use embassy_rp::{flash::{Async}, watchdog::Watchdog};
-use embassy_sync::{
-    blocking_mutex::raw::{NoopRawMutex},
-    mutex::Mutex,
-    once_lock::OnceLock,
-};
+use embassy_rp::watchdog::Watchdog;
+use embassy_rp::Peri;
+use embassy_rp::flash::Async;
+use embassy_rp::multicore::{Stack, spawn_core1};
+use embassy_rp::peripherals::WATCHDOG;
+
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex, once_lock::OnceLock};
+use embassy_time::Duration;
 use embedded_alloc::LlffHeap as Heap;
+use static_cell::StaticCell;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 const HEAP_SIZE: usize = 65536; // 64kB
+static mut CORE1_STACK: Stack<8192> = Stack::new();
+static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
+static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
-use config_manager::init_config_manager;
 use defmt::{debug, error, info};
+use embassy_executor::Executor;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+
 use {defmt_rtt as _, panic_probe as _};
 
 mod config;
-mod config_manager;
 mod config_resources;
 mod flash_layout;
 mod led_patterns;
@@ -39,41 +43,10 @@ use crate::config_resources::{
 pub type FlashType<'a> =
     embassy_rp::flash::Flash<'a, embassy_rp::peripherals::FLASH, Async, FLASH_SIZE>;
 pub type MFlashType<'a> = Mutex<NoopRawMutex, FlashType<'a>>;
-pub static OM_FLASH: OnceLock<MFlashType<'static>> = OnceLock::new();
 
-#[embassy_executor::task]
-async fn mark_firmware_booted_task() {
-    // Wait for 30 seconds to ensure the firmware is stable and then
-    // mark it as booted, preventing the bootloader from reverting
-    // to the previous firmware on the next boot.
-    Timer::after(Duration::from_millis(config::FIRMWARE_MARK_BOOTED_DELAY_MS as u64)).await;
+static OM_FLASH: OnceLock<MFlashType<'static>> = OnceLock::new();
 
-    info!("Marking firmware as booted");
-
-    let flash = OM_FLASH.get().await;
-
-    let config = embassy_boot::FirmwareUpdaterConfig::from_linkerfile(flash, flash);
-    let mut aligned = embassy_boot::AlignedBuffer([0; 4]);
-    let mut updater = embassy_boot::FirmwareUpdater::new(config, &mut aligned.0);
-
-    let bootloader_state_result = updater.get_state().await;
-    let bootloader_state = match bootloader_state_result {
-        Ok(state) => state,
-        Err(e) => {
-            error!("Failed to get bootloader state: {:?}", defmt::Debug2Format(&e));
-            return;
-        }
-    };
-    if bootloader_state == embassy_boot::State::Swap {
-        info!("Writing bootloader state to flash");
-        let mark_result = updater.mark_booted().await;
-        if let Err(e) = mark_result {
-            error!("Failed to mark firmware as booted: {:?}", defmt::Debug2Format(&e));
-        } else {
-            info!("Firmware marked as booted successfully");
-        }
-    }
-}
+static OM_WATCHDOG: OnceLock<Mutex<NoopRawMutex, Watchdog>> = OnceLock::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -85,30 +58,34 @@ async fn main(spawner: Spawner) {
     }
 
     let p = embassy_rp::init(Default::default());
+
     let r = split_resources!(p);
 
     info!("Starting up...");
 
     // Override bootloader watchdog
-    let mut watchdog = Watchdog::new(p.WATCHDOG);
+    let watchdog_peripheral = p.WATCHDOG;
+    let mut watchdog = Watchdog::new(watchdog_peripheral);
     watchdog.start(Duration::from_secs(8));
+    match OM_WATCHDOG
+        .init(Mutex::<NoopRawMutex, _>::new(watchdog))
+    {
+        Ok(_) => info!("Watchdog initialized successfully"),
+        Err(_) => error!("Failed to initialize watchdog"),
+    }
 
-    // Initialize the config manager
     let flash = embassy_rp::flash::Flash::<embassy_rp::peripherals::FLASH, Async, FLASH_SIZE>::new(
         p.FLASH, p.DMA_CH1,
     );
     let flash: MFlashType = Mutex::<NoopRawMutex, _>::new(flash);
 
-    if OM_FLASH.init(flash).is_err() {
-        error!("Failed to initialize flash");
-        return;
+    match OM_FLASH.init(flash) {
+        Ok(_) => info!("Flash initialized successfully"),
+        Err(_) => error!("Failed to initialize flash"),
     }
+    let flash = OM_FLASH.get().await;
 
-    info!("Initializing config manager...");
 
-    init_config_manager().await;
-
-    info!("Config manager initialized.");
 
     // Spawn the async tasks
     spawner
@@ -155,36 +132,25 @@ async fn main(spawner: Spawner) {
         .spawn(tasks::led_blinker::led_blinker_task(r.rgb_led))
         .unwrap();
 
-    spawner
-        .spawn(tasks::flash_writer::flash_writer_task())
-        .unwrap();
-
     //spawner
     //    .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
     //    .unwrap();
 
     spawner
-        .spawn(mark_firmware_booted_task())
+        .spawn(tasks::watchdog_feeder::watchdog_feeder_task())
         .unwrap();
 
-    // Main task can handle other initialization or remain idle
-    loop {
-        Timer::after(Duration::from_secs(1)).await;
+    spawner
+        .spawn(tasks::flash_writer::flash_writer_task(flash))
+        .unwrap();
 
-        watchdog.feed();
+    spawner
+        .spawn(tasks::mark_firmware_booted::mark_firmware_booted_task(
+            flash,
+        ))
+        .unwrap();
 
-        let inputs = tasks::gpio_input::INPUTS.lock().await;
-        debug!(
-            "vin: {:?} | vscap: {:?} | iin: {:?} | mcu_temp: {:?} | pcb_temp: {:?} | cm_on: {:?} | led_pwr: {:?} | led_active: {:?} | pg_5v: {:?} ",
-            inputs.vin,
-            inputs.vscap,
-            inputs.iin,
-            inputs.mcu_temp,
-            inputs.pcb_temp,
-            inputs.cm_on,
-            inputs.led_pwr,
-            inputs.led_active,
-            inputs.pg_5v
-        );
-    }
+    spawner
+        .spawn(tasks::config_manager::config_manager_task(flash))
+        .unwrap();
 }

@@ -17,8 +17,7 @@ use embassy_rp::pio::{Instance, InterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
 use smart_leds::{RGB8, brightness, gamma};
 
-use crate::config::{DEFAULT_LED_BRIGHTNESS, LED_BRIGHTNESS_CONFIG_KEY};
-use crate::config_manager::CONFIG_MANAGER;
+use crate::config::{DEFAULT_LED_BRIGHTNESS};
 use crate::config_resources::RGBLEDResources;
 
 const NUM_LEDS: usize = 5;
@@ -276,38 +275,9 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
     }
 }
 
-struct LEDBlinkerConfig {
-    brightness: u8,
-}
-impl Default for LEDBlinkerConfig {
-    fn default() -> Self {
-        Self {
-            brightness: DEFAULT_LED_BRIGHTNESS,
-        }
-    }
-}
-impl LEDBlinkerConfig {
-    const fn new(brightness: u8) -> Self {
-        Self { brightness }
-    }
-}
-
-static LED_BLINKER_CONFIG: Mutex<CriticalSectionRawMutex, LEDBlinkerConfig> =
-    Mutex::new(LEDBlinkerConfig::new(DEFAULT_LED_BRIGHTNESS));
-
 pub async fn set_led_brightness(brightness: u8) {
-    let mut config = LED_BLINKER_CONFIG.lock().await;
-    config.brightness = brightness;
-    let mut config_manager = CONFIG_MANAGER.get().await.lock().await;
-    config_manager
-        .set(LED_BRIGHTNESS_CONFIG_KEY, &brightness)
-        .await
-        .unwrap_or_else(|e| {
-            error!(
-                "Failed to set LED brightness in config manager: {}",
-                defmt::Debug2Format(&e)
-            );
-        });
+    // Save the brightness to flash using the config manager
+    crate::tasks::config_manager::set_led_brightness(brightness).await;
 
     LED_BLINKER_EVENT_CHANNEL
         .send(LEDBlinkerEvents::SetBrightness(brightness))
@@ -316,8 +286,7 @@ pub async fn set_led_brightness(brightness: u8) {
 }
 
 pub async fn get_led_brightness() -> u8 {
-    let config = LED_BLINKER_CONFIG.lock().await;
-    config.brightness
+    crate::tasks::config_manager::get_led_brightness().await
 }
 
 #[task]
@@ -339,26 +308,13 @@ pub async fn led_blinker_task(r: RGBLEDResources) {
 
     let fragments: FragmentVec = vec![Box::new(Off { duration_ms: 1000 })];
     let pattern = LEDPattern::new(fragments);
-    let brightness = {
-        debug!("Getting LED brightness from config manager");
-        let mut config_manager = CONFIG_MANAGER.get().await.lock().await;
-        let brightness_result = config_manager.get(LED_BRIGHTNESS_CONFIG_KEY).await;
 
-        match brightness_result {
-            Ok(Some(value)) => {
-                debug!("LED brightness from config manager: {}", value);
-                value
-            }
-            Ok(None) => {
-                debug!("No LED brightness found in config manager, using default");
-                DEFAULT_LED_BRIGHTNESS
-            }
-            Err(_) => {
-                debug!("Error getting LED brightness from config manager");
-                DEFAULT_LED_BRIGHTNESS
-            }
-        }
-    };
+    // Hackety hack: create a 100 ms delay to allow the config manager to initialize
+    embassy_time::Timer::after(Duration::from_millis(100)).await;
+
+    debug!("Getting LED brightness from config");
+    let brightness = crate::tasks::config_manager::get_led_brightness().await;
+    debug!("LED brightness from config: {}", brightness);
 
     let mut led_blinker = LEDBlinker::new(ws2812, pattern, brightness);
 
@@ -376,10 +332,6 @@ pub async fn led_blinker_task(r: RGBLEDResources) {
                 LEDBlinkerEvents::SetPattern(pattern) => led_blinker.set_pattern(pattern),
                 LEDBlinkerEvents::SetBrightness(brightness) => {
                     led_blinker.set_brightness(brightness);
-                    {
-                        let mut config = LED_BLINKER_CONFIG.lock().await;
-                        config.brightness = brightness;
-                    }
                 }
                 LEDBlinkerEvents::AddModifier(modifier) => led_blinker.add_modifier(modifier),
             }

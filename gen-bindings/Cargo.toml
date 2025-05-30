@@ -1,9 +1,0 @@
-[package]
-name = "gen-bindings"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-#halpi2-rs-firmware = { path = "../firmware" }
-postcard-bindgen = { version = "0.7.0", features = ["generating"] }
-shared-types = { path = "../shared-types", features = ["bindgen"] }

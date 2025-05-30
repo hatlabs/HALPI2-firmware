@@ -12,7 +12,7 @@ use crate::{
     config::{VIN_MAX_VALUE, VSCAP_MAX_VALUE}, config_resources::{AnalogInputResources, DigitalInputResources, PowerButtonInputResources, UserButtonInputResources}, tasks::power_button::POWER_BUTTON_EVENT_CHANNEL
 };
 
-use super::power_button::{PowerButtonChannelType, PowerButtonEvents};
+use super::power_button::{PowerButtonEvents};
 
 /// Input values that are read by the io_task and consumed by other tasks.
 #[derive(Clone, Format)]
