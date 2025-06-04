@@ -3,11 +3,11 @@ use crate::config::{
     FLASH_WRITE_BLOCK_SIZE, IIN_MAX_VALUE, MAX_TEMPERATURE_VALUE, MIN_TEMPERATURE_VALUE,
     VIN_MAX_VALUE, VSCAP_MAX_VALUE,
 };
+use crate::config_resources::I2CSecondaryResources;
 use crate::tasks::config_manager::{
     get_vscap_power_off_threshold, get_vscap_power_on_threshold, set_vscap_power_off_threshold,
     set_vscap_power_on_threshold,
 };
-use crate::config_resources::I2CSecondaryResources;
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
 };
@@ -103,7 +103,12 @@ async fn get_dfu_state(crc_error: bool, data_length_error: bool) -> DFUState {
     let flash_writer_state = flash_writer_status.state;
     let ready_for_more = !FLASH_WRITE_REQUEST_CHANNEL.is_full();
 
-    match (flash_writer_state, crc_error, data_length_error, ready_for_more) {
+    match (
+        flash_writer_state,
+        crc_error,
+        data_length_error,
+        ready_for_more,
+    ) {
         (_, true, _, _) => DFUState::CRCError,
         (_, _, true, _) => DFUState::DataLengthError,
         (FlashUpdateState::ProtocolError, _, _, _) => DFUState::ProtocolError,
@@ -117,10 +122,8 @@ async fn get_dfu_state(crc_error: bool, data_length_error: bool) -> DFUState {
 }
 
 async fn respond(device: &mut i2c_slave::I2cSlave<'_, I2C1>, data: &[u8]) {
-    debug!("Responding with data: {:02x}", data);
-    match device.respond_and_fill(data, 0x00).await {
-        Ok(read_status) => debug!("response read status {}", read_status),
-        Err(e) => error!("error while responding {}", e),
+    if let Err(e) = device.respond_and_fill(data, 0x00).await {
+        error!("error while responding {}", e)
     }
 }
 
@@ -144,7 +147,6 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                 error!("General call write received: {}", buf[..len]);
             }
             Ok(i2c_slave::Command::Read) => loop {
-                debug!("Master requested read");
                 match device.respond_to_read(&[state]).await {
                     Ok(x) => match x {
                         i2c_slave::ReadStatus::Done => break,
@@ -160,7 +162,6 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                 }
             },
             Ok(i2c_slave::Command::Write(len)) => {
-                info!("Master sent write: {:02x}", buf[..len]);
                 if len < 2 {
                     error!("Write command too short");
                     continue;
@@ -341,7 +342,6 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
             }
             Ok(i2c_slave::Command::WriteRead(len)) => {
                 let inputs = INPUTS.lock().await;
-                debug!("Master sent Write Read command: {:02x}", buf[0..len]);
                 match buf[0] {
                     // Query legacy hardware version
                     0x01 => respond(&mut device, &[LEGACY_HW_VERSION]).await,
