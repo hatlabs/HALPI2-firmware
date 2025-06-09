@@ -20,7 +20,6 @@ use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
 use crate::tasks::state_machine::{
     OffState, STATE_MACHINE_EVENT_CHANNEL, SleepShutdownState, StateMachine, StateMachineEvents,
 };
-use alloc::vec::Vec;
 use crc::{CRC_32_ISO_HDLC, Crc};
 use defmt::{debug, error, info};
 use embassy_executor::task;
@@ -28,50 +27,49 @@ use embassy_rp::peripherals::I2C1;
 use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 
 // Following commands are supported by the I2C secondary interface:
-// - Read 0x01: Query legacy hardware version
-// - Read 0x02: Query legacy firmware version
-// - Read 0x03: Query hardware version
-// - Read 0x04: Query firmware version
-// - Read 0x10: Query Raspi power state
+//
+// - Read  0x01: Query legacy hardware version (1 byte)
+// - Read  0x02: Query legacy firmware version (1 byte)
+// - Read  0x03: Query hardware version (4 bytes)
+// - Read  0x04: Query firmware version (4 bytes)
+// - Read  0x10: Query Raspi power state (1 byte, 0=off, 1=on)
 // - Write 0x10 0x00: Set Raspi power off
-// - Write 0x10 0x01: Set Raspi power on (who'd ever send that?)
-// - Read 0x12: Query watchdog timeout
-// - Write 0x12 [NN]: Set watchdog timeout to 0.1*NN seconds
-// - Write 0x12 0x00: Disable watchdog
-// - Read 0x13: Query power-on supercap threshold voltage
-// - Write 0x13 [NN]: Set power-on supercap threshold voltage to 0.01*NN V
-// - Read 0x14: Query power-off supercap threshold voltage
-// - Write 0x14 [NN]: Set power-off supercap threshold voltage to 0.01*NN V
-// - Read 0x15: Query state machine state
-// - Read 0x16: Query watchdog elapsed (always returns 0x00)
-// - Read 0x17: Query LED brightness setting
+// - Read  0x12: Query watchdog timeout (2 bytes, ms)
+// - Write 0x12 [NN NN]: Set watchdog timeout to NNNN ms (u16, big-endian)
+// - Write 0x12 0x00 0x00: Disable watchdog
+// - Read  0x13: Query power-on supercap threshold voltage (2 bytes, centivolts)
+// - Write 0x13 [NN NN]: Set power-on supercap threshold voltage to 0.01*NNNN V (u16, big-endian)
+// - Read  0x14: Query power-off supercap threshold voltage (2 bytes, centivolts)
+// - Write 0x14 [NN NN]: Set power-off supercap threshold voltage to 0.01*NNNN V (u16, big-endian)
+// - Read  0x15: Query state machine state (1 byte, placeholder)
+// - Read  0x16: Query watchdog elapsed (always returns 0x00)
+// - Read  0x17: Query LED brightness setting (1 byte)
 // - Write 0x17 [NN]: Set LED brightness to NN
-// - Read 0x20: Query DC IN voltage
-// - Read 0x21: Query supercap voltage
-// - Read 0x22: Query DC IN current
-// - Read 0x23: Query MCU temperature
+// - Read  0x20: Query DC IN voltage (2 bytes, scaled u16)
+// - Read  0x21: Query supercap voltage (2 bytes, scaled u16)
+// - Read  0x22: Query DC IN current (2 bytes, scaled u16)
+// - Read  0x23: Query MCU temperature (2 bytes, scaled u16)
 // - Write 0x30: [ANY]: Initiate shutdown
 // - Write 0x31: [ANY]: Initiate sleep shutdown
-// - Write 0x40: [NNNN]: Start DFU (device firmware update), binary size is NNNN bytes
-// - Read 0x41: Read DFU status
-// - Read 0x42: Read Number of Block Written
-// - Write 0x43: Upload a block of DFU data, serialized with postcard
+//
+// Device Firmware Update (DFU) protocol:
+// - Write 0x40 [NN NN NN NN]: Start DFU, firmware size is NNNNNNNN bytes (u32, big-endian)
+// - Read  0x41: Read DFU status (1 byte, see DFUState enum)
+// - Read  0x42: Read number of blocks written (2 bytes, u16)
+// - Write 0x43 [CRC32(4) BLOCKNUM(2) LEN(2) DATA]: Upload a block of DFU data
+//      - CRC32: CRC32 of BLOCKNUM+LEN+DATA (ISO HDLC)
+//      - BLOCKNUM: Block number (u16, big-endian)
+//      - LEN: Length of DATA (u16, big-endian)
+//      - DATA: Firmware data
 // - Write 0x44: Commit the uploaded DFU data
 // - Write 0x45: Abort the DFU process
-
-// DFU protocol:
 //
-// Every DFU write command must be followed by a Read DFU Status command (0x41) to get
-// the current status.
-//
-// An update always starts with a StartDFU command (0x40). Then,
-// a sequence of UploadBlock commands (0x43) is sent, each containing a block of
-// firmware data. The blocks are sent in order, starting from block 0. The
-// block size is 4096, and the last block may be smaller
-// than the others. If the status query indicates that the write queue is full,
-// the sender should wait for a short time before retrying to send the next block.
-// After all blocks are sent, a CommitDFU command (0x44) is sent to finalize the update.
-// If the update needs to be aborted, an AbortDFU command (0x45) can be sent at any time.
+// Notes:
+// - Every DFU write command must be followed by a Read DFU Status command (0x41) to get the current status.
+// - An update always starts with a StartDFU command (0x40), followed by a sequence of UploadBlock commands (0x43).
+//   The block size is 4096, and the last block may be smaller. If the status query indicates that the write queue is full,
+//   the sender should wait before retrying. After all blocks are sent, a CommitDFU command (0x44) is sent to finalize the update.
+//   If the update needs to be aborted, an AbortDFU command (0x45) can be sent at any time.
 
 const I2C_ADDR: u8 = 0x6d;
 
@@ -340,7 +338,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     x => error!("Invalid Write command: {:02x}", x),
                 }
             }
-            Ok(i2c_slave::Command::WriteRead(len)) => {
+            Ok(i2c_slave::Command::WriteRead(_)) => {
                 let inputs = INPUTS.lock().await;
                 match buf[0] {
                     // Query legacy hardware version
@@ -432,15 +430,6 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         let blocks_written = FLASH_WRITER_STATUS.lock().await.blocks_received;
                         let blocks_written_bytes = blocks_written.to_be_bytes();
                         respond(&mut device, &blocks_written_bytes).await
-                    }
-                    // Multi-byte ping
-                    0x50 => {
-                        debug!("Received ping command: {:02x}", buf[1..len]);
-                        let response = &buf[1..len];
-                        // Reverse the response bytes
-                        let response: Vec<u8> = response.iter().rev().cloned().collect();
-                        respond(&mut device, &response).await;
-                        debug!("Responded to ping command");
                     }
                     x => error!("Invalid Write Read command: 0x{:02x}", x),
                 }

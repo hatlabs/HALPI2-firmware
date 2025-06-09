@@ -2,7 +2,7 @@
 
 ## Introduction
 
-HALPI2 is a Boat Computer based on the Raspberry Pi Compute Module 5 (CM5),
+[HALPI2](https://shop.hatlabs.fi/products/halpi2-computer) is a Boat Computer based on the Raspberry Pi Compute Module 5 (CM5),
 designed and manufactured by Hat Labs. Among other things, it features a
 RP2040 microcontroller ("Controller") that handles the power management, communication with the
 Raspberry Pi, and the control of the peripherals. The firmware for the RP2040 is
@@ -19,7 +19,7 @@ The controller GPIO pins are documented below.
 | GPIO # | Name        | Description                                                    |
 | ------ | ----------- | -------------------------------------------------------------- |
 | 0      | RGBLED      | Data output for the five SK6805 (WS2812 style) RGB LEDs.       |
-| 1      | N/C         | Not connected.                                                 |
+| 1      | PCIe_LED    | PCIe LED indicator. Active low.                                |
 | 2      | PWR_BTN_IN  | Input from the physical power button. Active low.              |
 | 3      | USER_BTN    | Input from the user-defined button. Active low.                |
 | 4      | PCIESLEEP   | Pull high to put the PCIe device to sleep.                     |
@@ -30,10 +30,10 @@ The controller GPIO pins are documented below.
 | 9      | PWR_BTN_OUT | Output to the CM5 power button pin. Active low.                |
 | 10     | LED_PWR     | Power LED state from CM5. Active low.                          |
 | 11     | LED_ACTIVE  | Active LED state from CM5. Active low.                         |
-| 12     | I2C1_SDA    | I2C1 data line. CM5 is primary, the controller is secondary.   |
-| 13     | I2C1_SCL    | I2C1 clock line. CM5 is primary, the controller is secondary.  |
-| 14     | N/C         | Not connected.                                                 |
-| 15     | CM_ON       | Output from the CM5 to indicate it is powered on. Active high. |
+| 12     | N/C         | Not connected.                                                 |
+| 13     | CM_ON       | 3.3V output of the CM5. Used to detect the CM power state.     |
+| 14     | I2C1_SDA    | I2C1 data line. CM5 is primary, the controller is secondary.   |
+| 15     | I2C1_SCL    | I2C1 clock line. CM5 is primary, the controller is secondary.  |
 | 16     | TEST_MODE   | Input to enable test mode. Pull-high, active low.              |
 | 17     | GPIO17      | Connected to the test pad. Not used.                           |
 | 18     | PG_5V       | Power Good input from the 5V buck converter. Active high.      |
@@ -100,30 +100,35 @@ The controller communicates with the CM5 over I2C. The CM5 is the primary device
 on the I2C bus, and the controller is the secondary device. The controller
 responds to I2C requests using bus address 0x6d. The list of commands is given below:
 
-| R/W   | Command | R/W Type | Value | Description                                |
-| ----- | ------- | -------- | ----- | ------------------------------------------ |
-| Read  | 0x01    | u8       | 0xff  | Query legacy hardware version              |
-| Read  | 0x02    | u8       | 0xff  | Query legacy firmware version              |
-| Read  | 0x03    | u32      |       | Query hardware version                     |
-| Read  | 0x04    | u32      |       | Query firmware version                     |
-| Read  | 0x10    | u8       |       | Query Raspi power state                    |
-| Write | 0x10    | u8       | 0x00  | Set Raspi power off                        |
-| Write | 0x10    | u8       | 0x01  | Set Raspi power on (who'd ever send that?) |
-| Read  | 0x12    | u16      |       | Query watchdog timeout              |
-| Write | 0x12    | u16      |       | Set watchdog timeout to 0.1*NN seconds     |
-| Write | 0x12    | u16      | 0x00  | Disable watchdog                           |
-| Read  | 0x13    | u16      |       | Query power-on threshold voltage           |
-| Write | 0x13    | u16      |       | Set power-on threshold voltage to 0.01*NN V|
-| Read  | 0x14    | u16      |       | Query power-off threshold voltage          |
-| Write | 0x14    | u16      |       | Set power-off threshold voltage to 0.01*NN V|
-| Read  | 0x15    | u8       |       | Query state machine state                  |
-| Read  | 0x16    | u16      |       | Query watchdog elapsed                     |
-| Read  | 0x17    | u8       |       | Query LED brightness setting               |
-| Write | 0x17    | u8       |       | Set LED brightness to NN                   |
-| Read  | 0x20    | u16      |       | Query DC IN voltage                        |
-| Read  | 0x21    | u16      |       | Query supercap voltage                     |
-| Read  | 0x22    | u16      |       | Query DC IN current                        |
-| Read  | 0x23    | u16      |       | Query MCU temperature                      |
-| Read  | 0x24    | u16      |       | Query PCB temperature                      |
-| Write | 0x30    | u8       |       | Initiate shutdown                          |
-| Write | 0x31    | u8       |       | Initiate sleep shutdown                    |
+| R/W   | Command | R/W Type | Value         | Description                                             |
+| ----- | ------- | -------- | ------------- | ------------------------------------------------------- |
+| Read  | 0x01    | u8       | 0xff          | Query legacy hardware version                           |
+| Read  | 0x02    | u8       | 0xff          | Query legacy firmware version                           |
+| Read  | 0x03    | u32      |               | Query hardware version                                  |
+| Read  | 0x04    | u32      |               | Query firmware version                                  |
+| Read  | 0x10    | u8       |               | Query Raspi power state (0=off, 1=on)                   |
+| Write | 0x10    | u8       | 0x00          | Set Raspi power off                                     |
+| Write | 0x10    | u8       | 0x01          | Set Raspi power on (who'd ever send that?) |
+| Read  | 0x12    | u16      |               | Query watchdog timeout (ms)                             |
+| Write | 0x12    | u16      |               | Set watchdog timeout to NNNN ms (u16, big-endian)       |
+| Write | 0x12    | u16      | 0x0000        | Disable watchdog                                        |
+| Read  | 0x13    | u16      |               | Query power-on supercap threshold voltage (centivolts)  |
+| Write | 0x13    | u16      |               | Set power-on supercap threshold to 0.01*NNNN V          |
+| Read  | 0x14    | u16      |               | Query power-off supercap threshold voltage (centivolts) |
+| Write | 0x14    | u16      |               | Set power-off supercap threshold to 0.01*NNNN V         |
+| Read  | 0x15    | u8       |               | Query state machine state (placeholder)                 |
+| Read  | 0x16    | u8       |               | Query watchdog elapsed (always returns 0x00)            |
+| Read  | 0x17    | u8       |               | Query LED brightness setting                            |
+| Write | 0x17    | u8       |               | Set LED brightness to NN                                |
+| Read  | 0x20    | u16      |               | Query DC IN voltage                                     |
+| Read  | 0x21    | u16      |               | Query supercap voltage                                  |
+| Read  | 0x22    | u16      |               | Query DC IN current                                     |
+| Read  | 0x23    | u16      |               | Query MCU temperature                                   |
+| Write | 0x30    | u8       |               | Initiate shutdown                                       |
+| Write | 0x31    | u8       |               | Initiate sleep shutdown                                 |
+| Write | 0x40    | u32      |               | Start DFU, firmware size is NNNNNNNN bytes              |
+| Read  | 0x41    | u8       |               | Read DFU status (see DFUState enum)                     |
+| Read  | 0x42    | u16      |               | Read number of DFU blocks written                       |
+| Write | 0x43    | [var]    |               | Upload a block of DFU data (CRC32, blocknum, len, data) |
+| Write | 0x44    |          |               | Commit the uploaded DFU data                            |
+| Write | 0x45    |          |               | Abort the DFU process                                   |
