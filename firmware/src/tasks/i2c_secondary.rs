@@ -1,7 +1,7 @@
 use super::flash_writer::FLASH_WRITER_STATUS;
 use crate::config::{
-    FLASH_WRITE_BLOCK_SIZE, IIN_MAX_VALUE, MAX_TEMPERATURE_VALUE, MIN_TEMPERATURE_VALUE,
-    VIN_MAX_VALUE, VSCAP_MAX_VALUE,
+    FLASH_WRITE_BLOCK_SIZE, FW_VERSION, IIN_MAX_VALUE, MAX_TEMPERATURE_VALUE,
+    MIN_TEMPERATURE_VALUE, VIN_MAX_VALUE, VSCAP_MAX_VALUE,
 };
 use crate::config_resources::I2CSecondaryResources;
 use crate::tasks::config_manager::{
@@ -75,9 +75,6 @@ const I2C_ADDR: u8 = 0x6d;
 
 const LEGACY_FW_VERSION: u8 = 0xff;
 const LEGACY_HW_VERSION: u8 = 0x00;
-
-const FW_VERSION: [u8; 4] = [3, 0, 0, 0x01];
-const HW_VERSION: [u8; 4] = [3, 0, 0, 0x02];
 
 bind_interrupts!(struct Irqs {
     I2C1_IRQ => i2c::InterruptHandler<I2C1>;
@@ -347,8 +344,9 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x02 => respond(&mut device, &[LEGACY_FW_VERSION]).await,
                     // Query hardware version
                     0x03 => {
-                        debug!("Querying hardware version");
-                        respond(&mut device, &HW_VERSION).await
+                        // HALPI2 devices don't (yet?) have means for hardware
+                        // versioning. Return all-zeros.
+                        respond(&mut device, &[0, 0, 0, 0]).await
                     }
                     // Query firmware version
                     0x04 => respond(&mut device, &FW_VERSION).await,

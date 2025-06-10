@@ -38,3 +38,57 @@ pub const FLASH_ERASE_BLOCK_SIZE: usize = 4096;
 pub const FLASH_WRITE_BLOCK_SIZE: usize = 4096;
 
 pub const FIRMWARE_MARK_BOOTED_DELAY_MS: u32 = 30_000; // Delay before marking firmware as booted
+
+pub const FW_VERSION_STR: &str = "3.0.0-a1";
+
+// Parse version strings into byte arrays
+// The version format is [major, minor, patch, alpha], where alpha is 0xff
+// for stable releases and a running number for alpha releases.
+
+macro_rules! parse_version {
+    ($ver:expr) => {{
+        // Accepts "x.y.z" or "x.y.z-aN"
+        const fn parse(ver: &str) -> [u8; 4] {
+            let bytes = ver.as_bytes();
+            let mut major = 0u8;
+            let mut minor = 0u8;
+            let mut patch = 0u8;
+            let mut alpha = 0xffu8;
+            let mut i = 0;
+            // Parse major
+            while i < bytes.len() && bytes[i] != b'.' {
+                major = major * 10 + (bytes[i] - b'0');
+                i += 1;
+            }
+            i += 1; // skip '.'
+            // Parse minor
+            while i < bytes.len() && bytes[i] != b'.' {
+                minor = minor * 10 + (bytes[i] - b'0');
+                i += 1;
+            }
+            i += 1; // skip '.'
+            // Parse patch
+            while i < bytes.len() && i < bytes.len() && bytes[i] != b'-' {
+                patch = patch * 10 + (bytes[i] - b'0');
+                i += 1;
+            }
+            // Parse alpha if present
+            if i < bytes.len() && bytes[i] == b'-' {
+                i += 1; // skip '-'
+                if i + 1 < bytes.len() && bytes[i] == b'a' {
+                    i += 1; // skip 'a'
+                    let mut a = 0u8;
+                    while i < bytes.len() {
+                        a = a * 10 + (bytes[i] - b'0');
+                        i += 1;
+                    }
+                    alpha = a;
+                }
+            }
+            [major, minor, patch, alpha]
+        }
+        parse($ver)
+    }};
+}
+
+pub const FW_VERSION: [u8; 4] = parse_version!(FW_VERSION_STR);
