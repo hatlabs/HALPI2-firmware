@@ -345,8 +345,8 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     // Query hardware version
                     0x03 => {
                         // HALPI2 devices don't (yet?) have means for hardware
-                        // versioning. Return all-zeros.
-                        respond(&mut device, &[0, 0, 0, 0]).await
+                        // versioning. Return all-0xff.
+                        respond(&mut device, &[0xff, 0xff, 0xff, 0xff]).await
                     }
                     // Query firmware version
                     0x04 => respond(&mut device, &FW_VERSION).await,

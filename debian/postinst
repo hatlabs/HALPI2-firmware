@@ -18,9 +18,9 @@ set -e
 # the debian-policy package.
 
 CONFIG_FILE="/etc/halpid/firmware.conf"
-PKG_VERSION=$(zless /usr/share/doc/$DPKG_MAINTSCRIPT_PACKAGE/changelog* \
+DEB_VERSION=$(zless /usr/share/doc/$DPKG_MAINTSCRIPT_PACKAGE/changelog* \
     | dpkg-parsechangelog -l- -S'Version')
-FIRMWARE_PATH="/usr/share/halpi2/firmware/halpi2-rs-firmware-v${PKG_VERSION}.bin"
+FIRMWARE_PATH=$(dpkg -L $DPKG_MAINTSCRIPT_PACKAGE | grep -E '\.bin$$' | head -n 1)
 
 # Default configuration
 AUTO_FLASH_ON_INSTALL="yes"
@@ -49,7 +49,7 @@ case "$1" in
         fi
 
         # Check if hardware is accessible
-        if ! halpi status >/dev/null 2>&1; then
+        if ! halpi firmware-version >/dev/null 2>&1; then
             echo "Warning: HALPI2 hardware not accessible. Firmware not flashed."
             echo "Run 'sudo halpi flash $FIRMWARE_PATH' manually when hardware is connected."
             exit 0
@@ -58,7 +58,8 @@ case "$1" in
         # Flash the firmware with timeout
         echo "Flashing firmware (this may take up to $FLASH_TIMEOUT seconds)..."
         if timeout "$FLASH_TIMEOUT" halpi flash "$FIRMWARE_PATH"; then
-            echo "Firmware flashed successfully."
+            echo "Firmware flashed successfully. You need to shutdown the device to apply changes."
+            echo "Run 'sudo shutdown -h now' to power off the device (restart is not sufficient)."
         else
             echo "ERROR: Firmware flashing failed!"
             echo "You may need to flash manually: sudo halpi flash $FIRMWARE_PATH"

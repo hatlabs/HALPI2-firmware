@@ -11,9 +11,15 @@
 ################################################################################
 # Project-specific commands follow.
 
+function cargo-clean {
+  # Clean the cargo build directory.
+  # This is useful to remove all compiled artifacts and start fresh.
+  cargo clean $@
+}
+
 function clean {
   # Remove all temporary files and directories.
-  cargo clean
+  cargo-clean
 }
 
 function build {
@@ -75,8 +81,10 @@ function flash-all {
 
 function build-debian {
   _env
+  # We don't want to include the build artifacts in the Debian package.
+  cargo-clean
   echo "🏗️ Building Debian package..."
-  export FIRMWARE_FILE=$(ls firmware/*.bin | tail -n 1 | basename)
+  export FIRMWARE_VERSION=$(cat firmware/VERSION)
 	envsubst < debian/install.in > debian/install
 
   dpkg-buildpackage -us -uc
