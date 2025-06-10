@@ -2,3 +2,9 @@
 /target/
 **/.idea
 halpi2-fw-i2c-postcard/
+debian/halpi2-firmware/
+debian/files
+debian/install
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/halpi2-firmware.substvars

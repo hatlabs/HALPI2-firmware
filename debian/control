@@ -1,0 +1,21 @@
+Source: halpi2-firmware
+Section: embedded
+Priority: optional
+Maintainer: Matti Airas <matti.airas@hatlabs.fi>
+Rules-Requires-Root: no
+Build-Depends:
+ debhelper-compat (= 13),
+Standards-Version: 4.6.2
+Homepage: https://github.com/hatlabs/HALPI2-firmware-deb
+#Vcs-Browser: https://salsa.debian.org/debian/halpi2-firmware
+#Vcs-Git: https://salsa.debian.org/debian/halpi2-firmware.git
+
+Package: halpi2-firmware
+Architecture: any
+Depends:
+ halpid,
+ ${shlibs:Depends},
+ ${misc:Depends},
+Description: Firmware for the HALPI2 Computer
+ This package contains the firmware for the HALPI2 Computer onboard controller.
+ The firmware is automatically flashed to the device upon installation.

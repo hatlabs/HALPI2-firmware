@@ -21,11 +21,16 @@ function build {
   cargo build $@
 }
 
+function get-version {
+  VERSION=$(grep -m1 '^version = ' firmware/Cargo.toml | cut -d'"' -f2)
+  echo "$VERSION"
+}
+
 function build-binary {
   # Build the project binary.
   build --release
   # Get version from Cargo.toml
-  VERSION=$(grep -m1 '^version = ' firmware/Cargo.toml | cut -d'"' -f2)
+  VERSION=$(get-version)
   cargo objcopy --release -- -O binary firmware/halpi2-rs-firmware_v${VERSION}.bin
 }
 
@@ -66,6 +71,31 @@ function flash-all {
   # Flash the bootloader and the firmware.
   flash-bootloader
   upload
+}
+
+function build-debian {
+  _env
+  echo "🏗️ Building Debian package..."
+  export FIRMWARE_FILE=$(ls firmware/*.bin | tail -n 1 | basename)
+	envsubst < debian/install.in > debian/install
+
+  dpkg-buildpackage -us -uc
+}
+
+function debtools {
+  export DIR_NAME=$(basename "$PWD")
+  docker compose -f docker/docker-compose.debtools.yml run --rm debtools "$@"
+}
+
+function build-debtools {
+  # Build the Debian package using the debtools container.
+  export DIR_NAME=$(basename "$PWD")
+  docker compose -f docker/docker-compose.debtools.yml build debtools "$@"
+}
+
+function debtools-build {
+  # Build the Debian package using the debtools container.
+  debtools ./run build-debian
 }
 
 ################################################################################
@@ -136,7 +166,9 @@ function _env {
     # Make sure a .env file exists, otherwise docker-compose will complain
     cp .env.defaults .env
   fi
-  _export_unset .env.defaults
+  if [ -f .env.defaults ]; then
+    _export_unset .env.defaults
+  fi
 }
 
 function _export_unset {
