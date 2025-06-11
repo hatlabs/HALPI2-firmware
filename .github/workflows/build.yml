@@ -42,12 +42,13 @@ jobs:
 
     - name: Install format conversion tools
       run: |
+        # Install arm-none-eabi-objcopy for BIN conversion
+        sudo apt-get update
+        sudo apt-get install -y gcc-arm-none-eabi dpkg-dev libudev1 libudev-dev
+
         # Install elf2uf2-rs for UF2 conversion
         cargo install elf2uf2-rs
 
-        # Install arm-none-eabi-objcopy for BIN conversion
-        sudo apt-get update
-        sudo apt-get install -y gcc-arm-none-eabi dpkg-dev
 
     - name: Build bootloader
       run: |
@@ -129,48 +130,6 @@ jobs:
         cp artifacts/*.bin halpi2-firmware/usr/share/halpi2-firmware/
         cp artifacts/build-info.txt halpi2-firmware/usr/share/halpi2-firmware/
 
-        # Create a simple flash script for users
-        cat > halpi2-firmware/usr/bin/halpi-flash-firmware << 'EOF'
-        #!/bin/bash
-        # HALPI2 Firmware Flash Script
-
-        FIRMWARE_DIR="/usr/share/halpi2-firmware"
-
-        case "$1" in
-          bootloader)
-            echo "Flashing bootloader..."
-            if [ -f "$FIRMWARE_DIR/bootloader.uf2" ]; then
-              echo "Copy $FIRMWARE_DIR/bootloader.uf2 to your RP2040 in bootsel mode"
-            else
-              echo "Error: bootloader.uf2 not found"
-              exit 1
-            fi
-            ;;
-          firmware)
-            echo "Flashing firmware..."
-            if [ -f "$FIRMWARE_DIR/firmware.uf2" ]; then
-              echo "Copy $FIRMWARE_DIR/firmware.uf2 to your RP2040 in bootsel mode"
-            else
-              echo "Error: firmware.uf2 not found"
-              exit 1
-            fi
-            ;;
-          list)
-            echo "Available firmware files:"
-            ls -la "$FIRMWARE_DIR"
-            ;;
-          *)
-            echo "Usage: $0 {bootloader|firmware|list}"
-            echo "  bootloader - Flash bootloader"
-            echo "  firmware   - Flash main firmware"
-            echo "  list       - List available files"
-            exit 1
-            ;;
-        esac
-        EOF
-
-        chmod +x halpi2-firmware/usr/bin/halpi-flash-firmware
-
         # Create control file
         cat > halpi2-firmware/DEBIAN/control << EOF
         Package: halpi2-firmware
@@ -181,15 +140,14 @@ jobs:
          Firmware files for the HALPI2 embedded system.
          Includes bootloader and main firmware in ELF, UF2, and BIN formats.
          .
-         Use 'halpi-flash-firmware' command to flash firmware to device.
+         Use 'halpi flash' command to flash firmware to device.
         EOF
 
         # Create postinst script
         cat > halpi2-firmware/DEBIAN/postinst << 'EOF'
         #!/bin/bash
         echo "HALPI2 firmware installed to /usr/share/halpi2-firmware"
-        echo "Use 'halpi-flash-firmware list' to see available files"
-        echo "Use 'halpi-flash-firmware firmware' to flash main firmware"
+        echo "Use 'halpi flash' to flash main firmware"
         EOF
         chmod +x halpi2-firmware/DEBIAN/postinst
 
@@ -236,8 +194,7 @@ jobs:
         **Package Testing:**
         1. Download \`halpi2-firmware_*.deb\`
         2. Install: \`sudo dpkg -i halpi2-firmware_*.deb\`
-        3. Test: \`halpi-flash-firmware list\`
-        4. Verify files in \`/usr/share/halpi2-firmware/\`
+        3. Verify files in \`/usr/share/halpi2-firmware/\`
 
         **Files:**
         - \`bootloader.elf/.uf2/.bin\` - Bootloader in all formats
@@ -265,7 +222,6 @@ jobs:
         echo "#### Package Testing:" >> $GITHUB_STEP_SUMMARY
         echo "- [ ] Download \`.deb\` package" >> $GITHUB_STEP_SUMMARY
         echo "- [ ] Install on target system" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Verify \`halpi-flash-firmware\` command" >> $GITHUB_STEP_SUMMARY
         echo "- [ ] Check files in \`/usr/share/halpi2-firmware/\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🚀 Next Steps:" >> $GITHUB_STEP_SUMMARY
