@@ -127,7 +127,7 @@ jobs:
 
         # Replace dashes with tildes for Debian versioning
         VERSION=$(cat firmware/VERSION)
-        DEB_VERSION="${VERSION//-/\~}"
+        DEB_VERSION=$(echo "$VERSION" | sed 's/-\([a-zA-Z]\)/~\1/g')
 
         # Create a new changelog entry
         dch --newversion "$DEB_VERSION" \
