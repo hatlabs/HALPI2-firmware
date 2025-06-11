@@ -169,6 +169,7 @@ jobs:
         gh release delete $VERSION --yes 2>/dev/null || true
 
         # Create new draft release
+        # NOTE: Any prerelease files with tildes will be renamed to dots.
         gh release create $VERSION \
           --draft \
           --title "HALPI2 Firmware $VERSION" \
