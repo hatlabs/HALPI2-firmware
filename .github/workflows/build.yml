@@ -67,7 +67,7 @@ jobs:
         mkdir -p artifacts converted
 
         BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
-        FIRMWARE_VERSION=$(cargo pkgid --manifest-path firmware/Cargo.toml | sed 's/.*#//')
+        FIRMWARE_VERSION=$(cat firmware/VERSION)
 
         # Copy original ELF files
         cp target/thumbv6m-none-eabi/release/bootloader artifacts/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
@@ -126,14 +126,14 @@ jobs:
         export DEBFULLNAME="Hat Labs CI"
 
         # Replace dashes with tildes for Debian versioning
-        DEB_VERSION="${{ steps.version.outputs.version }}"
-        DEB_VERSION="${DEB_VERSION//-/~}"
+        VERSION=$(cat firmware/VERSION)
+        DEB_VERSION="${VERSION//-/~}"
 
         # Create a new changelog entry
         dch --newversion "$DEB_VERSION" \
             --distribution stable \
             --force-distribution \
-            "Automated release ${{ steps.version.outputs.version }}. See GitHub for details."
+            "Automated release $VERSION. See GitHub for details."
 
         echo "Updated changelog:"
         head -n 10 debian/changelog
@@ -164,13 +164,14 @@ jobs:
 
     - name: Create draft release
       run: |
+        VERSION=$(cat firmware/VERSION)
         # Delete existing draft if it exists
-        gh release delete ${{ steps.version.outputs.version }} --yes 2>/dev/null || true
+        gh release delete $VERSION --yes 2>/dev/null || true
 
         # Create new draft release
-        gh release create ${{ steps.version.outputs.version }} \
+        gh release create $VERSION \
           --draft \
-          --title "HALPI2 Firmware ${{ steps.version.outputs.version }}" \
+          --title "HALPI2 Firmware $VERSION" \
           --notes "🔧 **DRAFT - FOR TESTING ONLY**
 
         This is a draft release with freshly built firmware binaries in all formats.
@@ -206,9 +207,10 @@ jobs:
 
     - name: Create testing summary
       run: |
+        VERSION=$(cat firmware/VERSION)
         echo "## 🎯 Draft Release Created - Ready for Testing!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🧪 Testing Checklist:" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
