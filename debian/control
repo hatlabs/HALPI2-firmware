@@ -11,7 +11,7 @@ Homepage: https://github.com/hatlabs/HALPI2-firmware-deb
 #Vcs-Git: https://salsa.debian.org/debian/halpi2-firmware.git
 
 Package: halpi2-firmware
-Architecture: any
+Architecture: all
 Depends:
  halpid,
  ${shlibs:Depends},
