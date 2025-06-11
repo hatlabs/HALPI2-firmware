@@ -57,7 +57,7 @@ jobs:
 
     - name: Build firmware
       run: |
-        cargo build -p firmware --release
+        cargo build --release
         ls -la target/thumbv6m-none-eabi/release/
 
     - name: Determine version
