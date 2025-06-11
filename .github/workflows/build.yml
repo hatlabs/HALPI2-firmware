@@ -132,10 +132,14 @@ jobs:
         cp artifacts/*.bin halpi2-firmware/usr/share/halpi2-firmware/
         cp artifacts/build-info.txt halpi2-firmware/usr/share/halpi2-firmware/
 
+        # Debian version string needs to have the prefix "v" removed
+        # and replace dashes with tildes
+        DEBIAN_VERSION=$(echo "${{ steps.version.outputs.version }}" | sed 's/^v//; s/-/~/g')
+
         # Create control file
         cat > halpi2-firmware/DEBIAN/control << EOF
         Package: halpi2-firmware
-        Version: ${{ steps.version.outputs.version }}
+        Version: $DEBIAN_VERSION
         Architecture: all
         Maintainer: Hat Labs <info@hatlabs.fi>
         Description: HALPI2 firmware binaries
