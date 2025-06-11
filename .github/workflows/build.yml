@@ -1,0 +1,275 @@
+name: Build Firmware Draft
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v1.2.3)'
+        required: true
+        default: 'v0.0.0-test'
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: thumbv6m-none-eabi
+
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache target directory
+      uses: actions/cache@v3
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install format conversion tools
+      run: |
+        # Install elf2uf2-rs for UF2 conversion
+        cargo install elf2uf2-rs
+
+        # Install arm-none-eabi-objcopy for BIN conversion
+        sudo apt-get update
+        sudo apt-get install -y gcc-arm-none-eabi dpkg-dev
+
+    - name: Build bootloader
+      run: |
+        cargo build -p bootloader --release
+        ls -la target/thumbv6m-none-eabi/release/
+
+    - name: Build firmware
+      run: |
+        cargo build -p firmware --release
+        ls -la target/thumbv6m-none-eabi/release/
+
+    - name: Determine version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ inputs.version }}"
+        else
+          VERSION="${{ github.ref_name }}"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building version: $VERSION"
+
+    - name: Convert to all formats
+      run: |
+        mkdir -p artifacts converted
+
+        # Copy original ELF files
+        cp bootloader/target/thumbv6m-none-eabi/release/bootloader artifacts/bootloader.elf
+        cp firmware/target/thumbv6m-none-eabi/release/firmware artifacts/firmware.elf
+
+        # Convert each ELF to UF2 and BIN
+        for elf in artifacts/*.elf; do
+          if [ -f "$elf" ]; then
+            base=$(basename "$elf" .elf)
+            echo "Converting $base..."
+
+            # Convert to UF2 (for bootsel mode flashing)
+            elf2uf2-rs "$elf" "converted/${base}.uf2"
+
+            # Convert to BIN (for some programming tools)
+            arm-none-eabi-objcopy -O binary "$elf" "converted/${base}.bin"
+
+            echo "✓ Created ${base}.uf2 and ${base}.bin"
+          fi
+        done
+
+        # Copy converted files to artifacts
+        cp converted/* artifacts/
+
+        # Create build info
+        cat > artifacts/build-info.txt << EOF
+        Build Date: $(date -u)
+        Git Commit: ${{ github.sha }}
+        Git Tag: ${{ steps.version.outputs.version }}
+        Workflow: ${{ github.run_id }}
+
+        Files included:
+        - bootloader.elf - Bootloader ELF (for debugger)
+        - bootloader.uf2 - Bootloader UF2 (for bootsel mode)
+        - bootloader.bin - Bootloader binary
+        - firmware.elf - Firmware ELF (for debugger)
+        - firmware.uf2 - Firmware UF2 (for bootsel mode)
+        - firmware.bin - Firmware binary
+        - halpi2-firmware.deb - Debian package
+        EOF
+
+        ls -la artifacts/
+
+    - name: Build Debian package
+      run: |
+        # Setup package structure
+        mkdir -p halpi2-firmware/usr/share/halpi2-firmware
+        mkdir -p halpi2-firmware/usr/bin
+        mkdir -p halpi2-firmware/DEBIAN
+
+        # Copy all firmware files
+        cp artifacts/*.elf halpi2-firmware/usr/share/halpi2-firmware/
+        cp artifacts/*.uf2 halpi2-firmware/usr/share/halpi2-firmware/
+        cp artifacts/*.bin halpi2-firmware/usr/share/halpi2-firmware/
+        cp artifacts/build-info.txt halpi2-firmware/usr/share/halpi2-firmware/
+
+        # Create a simple flash script for users
+        cat > halpi2-firmware/usr/bin/halpi-flash-firmware << 'EOF'
+        #!/bin/bash
+        # HALPI2 Firmware Flash Script
+
+        FIRMWARE_DIR="/usr/share/halpi2-firmware"
+
+        case "$1" in
+          bootloader)
+            echo "Flashing bootloader..."
+            if [ -f "$FIRMWARE_DIR/bootloader.uf2" ]; then
+              echo "Copy $FIRMWARE_DIR/bootloader.uf2 to your RP2040 in bootsel mode"
+            else
+              echo "Error: bootloader.uf2 not found"
+              exit 1
+            fi
+            ;;
+          firmware)
+            echo "Flashing firmware..."
+            if [ -f "$FIRMWARE_DIR/firmware.uf2" ]; then
+              echo "Copy $FIRMWARE_DIR/firmware.uf2 to your RP2040 in bootsel mode"
+            else
+              echo "Error: firmware.uf2 not found"
+              exit 1
+            fi
+            ;;
+          list)
+            echo "Available firmware files:"
+            ls -la "$FIRMWARE_DIR"
+            ;;
+          *)
+            echo "Usage: $0 {bootloader|firmware|list}"
+            echo "  bootloader - Flash bootloader"
+            echo "  firmware   - Flash main firmware"
+            echo "  list       - List available files"
+            exit 1
+            ;;
+        esac
+        EOF
+
+        chmod +x halpi2-firmware/usr/bin/halpi-flash-firmware
+
+        # Create control file
+        cat > halpi2-firmware/DEBIAN/control << EOF
+        Package: halpi2-firmware
+        Version: ${{ steps.version.outputs.version }}
+        Architecture: all
+        Maintainer: Hat Labs <info@hatlabs.fi>
+        Description: HALPI2 firmware binaries
+         Firmware files for the HALPI2 embedded system.
+         Includes bootloader and main firmware in ELF, UF2, and BIN formats.
+         .
+         Use 'halpi-flash-firmware' command to flash firmware to device.
+        EOF
+
+        # Create postinst script
+        cat > halpi2-firmware/DEBIAN/postinst << 'EOF'
+        #!/bin/bash
+        echo "HALPI2 firmware installed to /usr/share/halpi2-firmware"
+        echo "Use 'halpi-flash-firmware list' to see available files"
+        echo "Use 'halpi-flash-firmware firmware' to flash main firmware"
+        EOF
+        chmod +x halpi2-firmware/DEBIAN/postinst
+
+        # Build the package
+        dpkg-deb --build halpi2-firmware
+
+        # Copy to artifacts
+        cp halpi2-firmware.deb artifacts/halpi2-firmware_${{ steps.version.outputs.version }}_all.deb
+
+        echo "✓ Debian package created"
+        ls -la artifacts/
+
+    - name: Create draft release
+      run: |
+        # Delete existing draft if it exists
+        gh release delete ${{ steps.version.outputs.version }} --yes 2>/dev/null || true
+
+        # Create new draft release
+        gh release create ${{ steps.version.outputs.version }} \
+          --draft \
+          --title "HALPI2 Firmware ${{ steps.version.outputs.version }}" \
+          --notes "🔧 **DRAFT - FOR TESTING ONLY**
+
+        This is a draft release with freshly built firmware binaries in all formats.
+
+        **Next steps:**
+        1. Download files below for testing
+        2. Test firmware on real hardware
+        3. Test Debian package installation
+        4. If tests pass, publish this release to trigger APT repo update
+
+        **Build Information:**
+        - Commit: \`${{ github.sha }}\`
+        - Built: $(date -u)
+        - Workflow: [\#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+        **Testing Instructions:**
+
+        **Hardware Testing:**
+        1. Download \`firmware.uf2\` and \`bootloader.uf2\`
+        2. Flash to RP2040 in bootsel mode
+        3. Verify functionality
+
+        **Package Testing:**
+        1. Download \`halpi2-firmware_*.deb\`
+        2. Install: \`sudo dpkg -i halpi2-firmware_*.deb\`
+        3. Test: \`halpi-flash-firmware list\`
+        4. Verify files in \`/usr/share/halpi2-firmware/\`
+
+        **Files:**
+        - \`bootloader.elf/.uf2/.bin\` - Bootloader in all formats
+        - \`firmware.elf/.uf2/.bin\` - Main firmware in all formats
+        - \`halpi2-firmware_*.deb\` - Complete Debian package
+        - \`build-info.txt\` - Build metadata" \
+          artifacts/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create testing summary
+      run: |
+        echo "## 🎯 Draft Release Created - Ready for Testing!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🧪 Testing Checklist:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "#### Hardware Testing:" >> $GITHUB_STEP_SUMMARY
+        echo "- [ ] Download \`firmware.uf2\`" >> $GITHUB_STEP_SUMMARY
+        echo "- [ ] Flash to RP2040 device" >> $GITHUB_STEP_SUMMARY
+        echo "- [ ] Verify basic functionality" >> $GITHUB_STEP_SUMMARY
+        echo "- [ ] Test bootloader if updated" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "#### Package Testing:" >> $GITHUB_STEP_SUMMARY
+        echo "- [ ] Download \`.deb\` package" >> $GITHUB_STEP_SUMMARY
+        echo "- [ ] Install on target system" >> $GITHUB_STEP_SUMMARY
+        echo "- [ ] Verify \`halpi-flash-firmware\` command" >> $GITHUB_STEP_SUMMARY
+        echo "- [ ] Check files in \`/usr/share/halpi2-firmware/\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 Next Steps:" >> $GITHUB_STEP_SUMMARY
+        echo "1. **Go to:** [Draft Release](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+        echo "2. **Download and test** all artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "3. **If tests pass:** Edit release → Uncheck 'Set as pre-release' → Publish" >> $GITHUB_STEP_SUMMARY
+        echo "4. **If tests fail:** Delete draft and fix issues" >> $GITHUB_STEP_SUMMARY
