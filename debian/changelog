@@ -1,10 +1,4 @@
-halpi2-firmware (3.0.0~a2-1) unstable; urgency=medium
-
-  * Blank HW version if not supported.
-
- -- Matti Airas <matti.airas@hatlabs.fi>  Tue, 10 Jun 2025 09:06:40 +0000
-
-halpi2-firmware (3.0.0~a1-1) unstable; urgency=medium
+halpi2-firmware (3.0.0~a1) unstable; urgency=medium
 
   * Initial release.
 
