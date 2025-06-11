@@ -19,6 +19,19 @@
 	dh $@
 
 
+override_dh_auto_build:
+	# Skip building - we're using pre-built firmware files
+
+override_dh_auto_install:
+	# Install firmware files from the artifacts directory
+	dh_install artifacts/* usr/share/halpi2-firmware/
+
+	# Install any scripts or additional files
+	# (if you have them defined in debian/install or debian/*.install)
+
+override_dh_auto_clean:
+	# Custom cleanup if needed
+
 # dh_make generated override targets.
 # This is an example for Cmake (see <https://bugs.debian.org/641051>).
 #override_dh_auto_configure:
