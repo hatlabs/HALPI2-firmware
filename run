@@ -38,7 +38,7 @@ function build-binary {
   # Get version from Cargo.toml
   VERSION=$(get-version)
   mkdir -p firmware/artifacts
-  cargo objcopy --release -- -O binary firmware/artifacts/halpi2-rs-firmware_v${VERSION}.bin
+  cargo objcopy --release -- -O binary firmware/artifacts/halpi2-rs-firmware_${VERSION}.bin
 }
 
 function build-uf2 {
@@ -47,7 +47,7 @@ function build-uf2 {
   # Get version from Cargo.toml
   VERSION=$(get-version)
   mkdir -p firmware/artifacts
-  elf2uf2-rs target/thumbv6m-none-eabi/release/halpi2-rs-firmware firmware/artifacts/halpi2-rs-firmware_v${VERSION}.uf2
+  elf2uf2-rs target/thumbv6m-none-eabi/release/halpi2-rs-firmware firmware/artifacts/halpi2-rs-firmware_${VERSION}.uf2
 }
 
 
@@ -93,7 +93,6 @@ function flash-all {
 function build-debian {
   _env
   # We don't want to include the build artifacts in the Debian package.
-  cargo-clean
   echo "🏗️ Building Debian package..."
   export FIRMWARE_VERSION=$(cat firmware/VERSION)
 	envsubst < debian/install.in > debian/install
@@ -113,6 +112,7 @@ function build-debtools {
 }
 
 function debtools-build {
+  cargo-clean
   # Build the Debian package using the debtools container.
   debtools ./run build-debian
 }
