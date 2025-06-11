@@ -75,9 +75,12 @@ jobs:
       run: |
         mkdir -p artifacts converted
 
+        BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
+        FIRMWARE_VERSION=$(cargo pkgid | sed 's/.*#//')
+
         # Copy original ELF files
-        cp bootloader/target/thumbv6m-none-eabi/release/bootloader artifacts/bootloader.elf
-        cp firmware/target/thumbv6m-none-eabi/release/firmware artifacts/firmware.elf
+        cp target/thumbv6m-none-eabi/release/bootloader artifacts/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
+        cp target/thumbv6m-none-eabi/release/firmware artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.elf
 
         # Convert each ELF to UF2 and BIN
         for elf in artifacts/*.elf; do
@@ -106,13 +109,12 @@ jobs:
         Workflow: ${{ github.run_id }}
 
         Files included:
-        - bootloader.elf - Bootloader ELF (for debugger)
-        - bootloader.uf2 - Bootloader UF2 (for bootsel mode)
-        - bootloader.bin - Bootloader binary
-        - firmware.elf - Firmware ELF (for debugger)
-        - firmware.uf2 - Firmware UF2 (for bootsel mode)
-        - firmware.bin - Firmware binary
-        - halpi2-firmware.deb - Debian package
+        - halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf - Bootloader ELF (for debugger)
+        - halpi2-rs-bootloader_${BOOTLOADER_VERSION}.uf2 - Bootloader UF2 (for bootsel mode)
+        - halpi2-rs-bootloader_${BOOTLOADER_VERSION}.bin - Bootloader binary
+        - halpi2-rs-firmware_${FIRMWARE_VERSION}.elf - Firmware ELF (for debugger)
+        - halpi2-rs-firmware_${FIRMWARE_VERSION}.uf2 - Firmware UF2 (for bootsel mode)
+        - halpi2-rs-firmware_${FIRMWARE_VERSION}.bin - Firmware binary
         EOF
 
         ls -la artifacts/
