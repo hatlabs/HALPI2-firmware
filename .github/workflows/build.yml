@@ -76,11 +76,11 @@ jobs:
         mkdir -p artifacts converted
 
         BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
-        FIRMWARE_VERSION=$(cargo pkgid | sed 's/.*#//')
+        FIRMWARE_VERSION=$(cargo pkgid --manifest-path firmware/Cargo.toml | sed 's/.*#//')
 
         # Copy original ELF files
         cp target/thumbv6m-none-eabi/release/bootloader artifacts/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
-        cp target/thumbv6m-none-eabi/release/firmware artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.elf
+        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.elf
 
         # Convert each ELF to UF2 and BIN
         for elf in artifacts/*.elf; do
