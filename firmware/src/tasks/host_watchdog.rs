@@ -3,7 +3,7 @@ use embassy_executor::task;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Instant, Ticker};
 
-use crate::{config::HOST_WATCHDOG_DEFAULT_TIMEOUT_MS, tasks::state_machine::{StateMachine, StateMachineEvents, WatchdogRebootState, STATE_MACHINE_EVENT_CHANNEL}};
+use crate::{config::HOST_WATCHDOG_DEFAULT_TIMEOUT_MS, tasks::state_machine::{StateMachineEvents, STATE_MACHINE_EVENT_CHANNEL}};
 
 #[derive(Clone, Format)]
 struct HostWatchdogConfig {
@@ -105,9 +105,8 @@ pub async fn host_watchdog_task() {
         {
             // Reset the system
             warn!("Watchdog timeout");
-            let new_state = StateMachine::WatchdogReboot(WatchdogRebootState::new());
             STATE_MACHINE_EVENT_CHANNEL
-                .send(StateMachineEvents::SetState(new_state))
+                .send(StateMachineEvents::TriggerWatchdogReboot)
                 .await;
             last_ping = now;
             // Update the stored last ping time

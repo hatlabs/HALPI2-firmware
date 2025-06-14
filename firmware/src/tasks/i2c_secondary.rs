@@ -18,7 +18,7 @@ use crate::tasks::host_watchdog::{
 };
 use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
 use crate::tasks::state_machine::{
-    OffState, STATE_MACHINE_EVENT_CHANNEL, SleepShutdownState, StateMachine, StateMachineEvents,
+    StateMachineEvents, TargetState, STATE_MACHINE_EVENT_CHANNEL
 };
 use crc::{CRC_32_ISO_HDLC, Crc};
 use defmt::{debug, error, info};
@@ -171,9 +171,8 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                                 if inputs.pg_5v {
                                     // Power off the Raspi
                                     info!("Powering off the Raspi");
-                                    let new_state = StateMachine::Off(OffState::new());
                                     STATE_MACHINE_EVENT_CHANNEL
-                                        .send(StateMachineEvents::SetState(new_state))
+                                        .send(StateMachineEvents::TriggerOff)
                                         .await;
                                 } else {
                                     error!("Raspi power is already off");
@@ -228,17 +227,15 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     // Initiate shutdown
                     0x30 => {
                         info!("Initiating shutdown");
-                        let new_state = StateMachine::Off(OffState::new());
                         STATE_MACHINE_EVENT_CHANNEL
-                            .send(StateMachineEvents::SetState(new_state))
+                            .send(StateMachineEvents::TriggerOff)
                             .await;
                     }
                     // Initiate sleep shutdown
                     0x31 => {
                         info!("Initiating sleep shutdown");
-                        let new_state = StateMachine::SleepShutdown(SleepShutdownState::new());
                         STATE_MACHINE_EVENT_CHANNEL
-                            .send(StateMachineEvents::SetState(new_state))
+                            .send(StateMachineEvents::TriggerSleepShutdown)
                             .await;
                     }
                     // Start DFU process
