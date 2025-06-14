@@ -65,3 +65,4 @@ embedded-storage-async = "0.4.1"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 crc = "3.3.0"
 static_cell = "2.1.0"
+statig = { git = "https://github.com/mdeloof/statig", rev = "cc0b4c8bedb80ca4728884812e07b880ba0010a0", features = ["async"] }
