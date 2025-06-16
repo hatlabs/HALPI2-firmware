@@ -1,4 +1,6 @@
 use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
 
 use alloc::boxed::Box;
 use alloc::vec;
@@ -45,9 +47,11 @@ fn wheel(mut wheel_pos: u8) -> RGB8 {
     (wheel_pos * 3, 255 - wheel_pos * 3, 0).into()
 }
 
-pub trait LEDPatternFragment {
+// Object-safe trait using boxed futures
+pub trait LEDPatternFragment: Send {
     fn duration_ms(&self) -> u32;
-    async fn run<'a>(&'a self, t: u32, leds: &'a mut [RGB8; NUM_LEDS]);
+    fn run<'a>(&'a self, t: u32, leds: &'a mut [RGB8; NUM_LEDS]) -> Pin<Box<dyn Future<Output = ()> + 'a + Send>>;
+    fn type_name(&self) -> &'static str;
 }
 
 #[derive(Clone, Debug)]
@@ -67,10 +71,16 @@ impl LEDPatternFragment for OneColor {
         self.duration_ms
     }
 
-    async fn run<'a>(&'a self, _t: u32, leds: &'a mut [RGB8; NUM_LEDS]) {
-        for led in leds.iter_mut() {
-            *led = self.color;
-        }
+    fn run<'a>(&'a self, _t: u32, leds: &'a mut [RGB8; NUM_LEDS]) -> Pin<Box<dyn Future<Output = ()> + 'a + Send>> {
+        Box::pin(async move {
+            for led in leds.iter_mut() {
+                *led = self.color;
+            }
+        })
+    }
+
+    fn type_name(&self) -> &'static str {
+        "OneColor"
     }
 }
 
@@ -92,10 +102,16 @@ impl LEDPatternFragment for Off {
         self.duration_ms
     }
 
-    async fn run<'a>(&'a self, _t: u32, leds: &'a mut [RGB8; NUM_LEDS]) {
-        for led in leds.iter_mut() {
-            *led = RGB8::default();
-        }
+    fn run<'a>(&'a self, _t: u32, leds: &'a mut [RGB8; NUM_LEDS]) -> Pin<Box<dyn Future<Output = ()> + 'a + Send>> {
+        Box::pin(async move {
+            for led in leds.iter_mut() {
+                *led = RGB8::default();
+            }
+        })
+    }
+
+    fn type_name(&self) -> &'static str {
+        "Off"
     }
 }
 
@@ -104,6 +120,7 @@ pub struct RoyalRainbow {
     pub duration_ms: u32,
     pub direction: bool,
 }
+
 impl RoyalRainbow {
     pub fn new(duration: u32, direction: bool) -> Self {
         Self {
@@ -112,18 +129,25 @@ impl RoyalRainbow {
         }
     }
 }
+
 impl LEDPatternFragment for RoyalRainbow {
     fn duration_ms(&self) -> u32 {
         self.duration_ms
     }
 
-    async fn run(&self, t: u32, leds: &mut [RGB8; NUM_LEDS]) {
-        let ti: i32 = t as i32;
-        let td = if self.direction { -ti } else { ti };
-        let j = td / 2;
-        for (i, led) in leds.iter_mut().enumerate() {
-            *led = wheel((((i * 256) as i32 / NUM_LEDS as i32 + j) & 255) as u8);
-        }
+    fn run<'a>(&'a self, t: u32, leds: &'a mut [RGB8; NUM_LEDS]) -> Pin<Box<dyn Future<Output = ()> + 'a + Send>> {
+        Box::pin(async move {
+            let ti: i32 = t as i32;
+            let td = if self.direction { -ti } else { ti };
+            let j = td / 2;
+            for (i, led) in leds.iter_mut().enumerate() {
+                *led = wheel((((i * 256) as i32 / NUM_LEDS as i32 + j) & 255) as u8);
+            }
+        })
+    }
+
+    fn type_name(&self) -> &'static str {
+        "RoyalRainbow"
     }
 }
 
@@ -147,10 +171,16 @@ impl LEDPatternFragment for Colors {
         self.duration_ms
     }
 
-    async fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
-        for (i, led) in leds.iter_mut().enumerate() {
-            *led = self.colors[i % NUM_LEDS];
-        }
+    fn run<'a>(&'a self, _t: u32, leds: &'a mut [RGB8; NUM_LEDS]) -> Pin<Box<dyn Future<Output = ()> + 'a + Send>> {
+        Box::pin(async move {
+            for (i, led) in leds.iter_mut().enumerate() {
+                *led = self.colors[i % NUM_LEDS];
+            }
+        })
+    }
+
+    fn type_name(&self) -> &'static str {
+        "Colors"
     }
 }
 
@@ -170,43 +200,47 @@ impl LEDPatternFragment for SupercapBar {
         self.duration_ms
     }
 
-    async fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
-        // Read the current supercap voltage (in V)
-        let vscap = {
-            let inputs = INPUTS.lock().await;
-            inputs.vscap
-        };
+    fn run<'a>(&'a self, _t: u32, leds: &'a mut [RGB8; NUM_LEDS]) -> Pin<Box<dyn Future<Output = ()> + 'a + Send>> {
+        let color = self.color;
+        Box::pin(async move {
+            // Read the current supercap voltage (in V)
+            let vscap = {
+                let inputs = INPUTS.lock().await;
+                inputs.vscap
+            };
 
-        for i in 0..NUM_LEDS {
-            let low = 5.0 + i as f32;
-            let high = 6.0 + i as f32;
-            if vscap >= high {
-                leds[i] = self.color;
-            } else if vscap > low {
-                let frac = (vscap - low).clamp(0.0, 1.0);
-                leds[i] = RGB8 {
-                    r: (self.color.r as f32 * frac) as u8,
-                    g: (self.color.g as f32 * frac) as u8,
-                    b: (self.color.b as f32 * frac) as u8,
-                };
-            } else {
-                leds[i] = RGB8::default();
+            for i in 0..NUM_LEDS {
+                let low = 5.0 + i as f32;
+                let high = 6.0 + i as f32;
+                if vscap >= high {
+                    leds[i] = color;
+                } else if vscap > low {
+                    let frac = (vscap - low).clamp(0.0, 1.0);
+                    leds[i] = RGB8 {
+                        r: (color.r as f32 * frac) as u8,
+                        g: (color.g as f32 * frac) as u8,
+                        b: (color.b as f32 * frac) as u8,
+                    };
+                } else {
+                    leds[i] = RGB8::default();
+                }
             }
-        }
+        })
+    }
+
+    fn type_name(&self) -> &'static str {
+        "SupercapBar"
     }
 }
 
-pub trait LEDPatternFragmentDebug: LEDPatternFragment + fmt::Debug + Send {}
-impl<T: LEDPatternFragment + fmt::Debug + Send> LEDPatternFragmentDebug for T {}
+pub type FragmentVec = Vec<Box<dyn LEDPatternFragment>>;
 
-pub type FragmentVec = Vec<Box<dyn LEDPatternFragmentDebug>>;
-
-#[derive(Debug)]
 pub struct LEDPattern {
     fragments: FragmentVec,
     current_fragment_idx: usize,
     current_fragment_start_ms: u64,
 }
+
 impl LEDPattern {
     pub fn new(fragments: FragmentVec) -> Self {
         Self {
@@ -216,7 +250,7 @@ impl LEDPattern {
         }
     }
 
-    fn update(&mut self, data: &mut [RGB8; NUM_LEDS], oneshot: bool) -> bool {
+    async fn update(&mut self, data: &mut [RGB8; NUM_LEDS], oneshot: bool) -> bool {
         if self.current_fragment_start_ms == 0 {
             self.current_fragment_start_ms = Instant::now().as_millis();
         }
@@ -243,9 +277,22 @@ impl LEDPattern {
 
         // Call the run method of the current fragment
         let time_diff = (Instant::now().as_millis() - self.current_fragment_start_ms) as u32;
-        self.fragments[self.current_fragment_idx].run(time_diff, data);
+        self.fragments[self.current_fragment_idx].run(time_diff, data).await;
 
         true
+    }
+}
+
+// Implement Debug manually for LEDPattern
+impl fmt::Debug for LEDPattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let fragment_types: Vec<&str> = self.fragments.iter().map(|f| f.type_name()).collect();
+        f.debug_struct("LEDPattern")
+            .field("current_fragment_idx", &self.current_fragment_idx)
+            .field("current_fragment_start_ms", &self.current_fragment_start_ms)
+            .field("fragments_count", &self.fragments.len())
+            .field("fragment_types", &fragment_types)
+            .finish()
     }
 }
 
@@ -282,25 +329,27 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
 
     async fn update(&mut self) {
         self.data.copy_from_slice(&self.last_colors);
-        self.pattern.update(&mut self.data, false);
+        self.pattern.update(&mut self.data, false).await;
         self.last_colors = self.data;
 
-        let mut mods: ModifierVec = Vec::new();
-        for (i, modifier) in self.modifiers.iter_mut().enumerate() {
-            if !modifier.update(&mut self.data, true) {
-                mods.remove(i);
+        // Use retain instead of manual removal to avoid index issues
+        let mut i = 0;
+        while i < self.modifiers.len() {
+            if !self.modifiers[i].update(&mut self.data, true).await {
+                self.modifiers.remove(i);
+            } else {
+                i += 1;
             }
         }
-        self.modifiers = mods;
 
         // Apply brightness
-
         let gamma_corrected = gamma(self.data.iter().cloned());
         let brightness_corrected = brightness(gamma_corrected, self.brightness);
-        let corrected_data = brightness_corrected.map(|color| RGB8::new(color.r, color.g, color.b));
+        let corrected_data: Vec<RGB8> = brightness_corrected.collect();
+
         // Write the data back into an RGB8 array
         let mut output_data: [RGB8; NUM_LEDS] = [RGB8::default(); NUM_LEDS];
-        for (i, color) in corrected_data.enumerate() {
+        for (i, color) in corrected_data.into_iter().enumerate().take(NUM_LEDS) {
             output_data[i] = color;
         }
 
