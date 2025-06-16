@@ -3,13 +3,12 @@ use core::fmt;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use defmt::{debug, error, info};
+use defmt::{debug, info};
 use embassy_executor::task;
 use embassy_rp::bind_interrupts;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel;
-use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker};
 
 use embassy_rp::peripherals::PIO0;
@@ -17,8 +16,8 @@ use embassy_rp::pio::{Instance, InterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
 use smart_leds::{RGB8, brightness, gamma};
 
-use crate::config::{DEFAULT_LED_BRIGHTNESS};
 use crate::config_resources::RGBLEDResources;
+use crate::tasks::gpio_input::INPUTS;
 
 const NUM_LEDS: usize = 5;
 
@@ -48,7 +47,7 @@ fn wheel(mut wheel_pos: u8) -> RGB8 {
 
 pub trait LEDPatternFragment {
     fn duration_ms(&self) -> u32;
-    fn run(&self, t: u32, leds: &mut [RGB8; NUM_LEDS]);
+    async fn run<'a>(&'a self, t: u32, leds: &'a mut [RGB8; NUM_LEDS]);
 }
 
 #[derive(Clone, Debug)]
@@ -68,7 +67,7 @@ impl LEDPatternFragment for OneColor {
         self.duration_ms
     }
 
-    fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
+    async fn run<'a>(&'a self, _t: u32, leds: &'a mut [RGB8; NUM_LEDS]) {
         for led in leds.iter_mut() {
             *led = self.color;
         }
@@ -93,7 +92,7 @@ impl LEDPatternFragment for Off {
         self.duration_ms
     }
 
-    fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
+    async fn run<'a>(&'a self, _t: u32, leds: &'a mut [RGB8; NUM_LEDS]) {
         for led in leds.iter_mut() {
             *led = RGB8::default();
         }
@@ -118,7 +117,7 @@ impl LEDPatternFragment for RoyalRainbow {
         self.duration_ms
     }
 
-    fn run(&self, t: u32, leds: &mut [RGB8; NUM_LEDS]) {
+    async fn run(&self, t: u32, leds: &mut [RGB8; NUM_LEDS]) {
         let ti: i32 = t as i32;
         let td = if self.direction { -ti } else { ti };
         let j = td / 2;
@@ -148,9 +147,51 @@ impl LEDPatternFragment for Colors {
         self.duration_ms
     }
 
-    fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
+    async fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
         for (i, led) in leds.iter_mut().enumerate() {
             *led = self.colors[i % NUM_LEDS];
+        }
+    }
+}
+
+pub struct SupercapBar {
+    pub duration_ms: u32,
+    pub color: RGB8,
+}
+
+impl SupercapBar {
+    pub fn new(duration_ms: u32, color: RGB8) -> Self {
+        Self { duration_ms, color }
+    }
+}
+
+impl LEDPatternFragment for SupercapBar {
+    fn duration_ms(&self) -> u32 {
+        self.duration_ms
+    }
+
+    async fn run(&self, _t: u32, leds: &mut [RGB8; NUM_LEDS]) {
+        // Read the current supercap voltage (in V)
+        let vscap = {
+            let inputs = INPUTS.lock().await;
+            inputs.vscap
+        };
+
+        for i in 0..NUM_LEDS {
+            let low = 5.0 + i as f32;
+            let high = 6.0 + i as f32;
+            if vscap >= high {
+                leds[i] = self.color;
+            } else if vscap > low {
+                let frac = (vscap - low).clamp(0.0, 1.0);
+                leds[i] = RGB8 {
+                    r: (self.color.r as f32 * frac) as u8,
+                    g: (self.color.g as f32 * frac) as u8,
+                    b: (self.color.b as f32 * frac) as u8,
+                };
+            } else {
+                leds[i] = RGB8::default();
+            }
         }
     }
 }
