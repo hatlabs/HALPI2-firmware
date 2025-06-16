@@ -140,9 +140,6 @@ readonly PROJECT_ROOT=$(pwd)
 # Store the absolute path to this script (useful for recursion).
 readonly SCRIPT="$PROJECT_ROOT/$(basename "$0")"
 
-# Project source directories.
-SRC="backend frontend"
-
 ################################################################################
 # Meta-commands and utilities follow.
 
