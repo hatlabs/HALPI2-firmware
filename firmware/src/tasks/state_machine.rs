@@ -138,10 +138,15 @@ pub struct HalpiStateMachine {}
 
 #[state_machine(
     initial = "State::off_no_vin()",
+    before_transition = "Self::before_transition",
     state(derive(Debug)),
     superstate(derive(Debug))
 )]
 impl HalpiStateMachine {
+    async fn before_transition(&mut self, source: &State, target: &State) {
+        info!("Transitioning from {:?} to {:?}", defmt::Debug2Format(source), defmt::Debug2Format(target));
+    }
+
     #[allow(unused_variables)]
     #[state(entry_action = "enter_off_no_vin")]
     async fn off_no_vin(&mut self, event: &Event, context: &mut Context) -> Outcome<State> {
