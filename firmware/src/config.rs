@@ -30,8 +30,8 @@ pub const OFF_STATE_DURATION_MS: u32 = 5000; // ms
 pub const HOST_WATCHDOG_DEFAULT_TIMEOUT_MS: u16 = 10_000; // ms
 pub const HOST_WATCHDOG_TIMEOUT_CONFIG_KEY: u16 = 0x1006; // Key for the watchdog timeout in the config
 
-// how long to stay in the watchdog reboot state before rebooting
-pub const HOST_WATCHDOG_REBOOT_DURATION_MS: u32 = 2000; // ms
+// how long to stay in the watchdog alert state before rebooting
+pub const HOST_WATCHDOG_REBOOT_DURATION_MS: u32 = 5000; // ms
 
 pub const FLASH_SIZE: usize = 4 * 1024 * 1024;
 

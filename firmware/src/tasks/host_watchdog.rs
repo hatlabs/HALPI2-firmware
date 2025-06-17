@@ -35,6 +35,11 @@ impl HostWatchdogConfig {
 static HOST_WATCHDOG_CONFIG: Mutex<CriticalSectionRawMutex, HostWatchdogConfig> =
     Mutex::new(HostWatchdogConfig::new(HOST_WATCHDOG_DEFAULT_TIMEOUT_MS));
 
+pub async fn is_host_watchdog_enabled() -> bool {
+    let config = HOST_WATCHDOG_CONFIG.lock().await;
+    config.enabled
+}
+
 pub async fn get_host_watchdog_timeout_ms() -> u16 {
     let config = HOST_WATCHDOG_CONFIG.lock().await;
     config.timeout_ms
@@ -103,15 +108,11 @@ pub async fn host_watchdog_task() {
         if now.duration_since(last_ping) > Duration::from_millis(timeout_ms as u64)
             && timeout_ms > 0
         {
-            // Reset the system
+            // Enter the alert state
             warn!("Watchdog timeout");
             STATE_MACHINE_EVENT_CHANNEL
-                .send(StateMachineEvents::WatchdogReboot)
+                .send(StateMachineEvents::WatchdogAlert)
                 .await;
-            last_ping = now;
-            // Update the stored last ping time
-            let mut config = HOST_WATCHDOG_CONFIG.lock().await;
-            config.last_ping = last_ping;
         }
     }
 }

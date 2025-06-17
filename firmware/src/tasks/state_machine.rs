@@ -1,5 +1,8 @@
 use crate::led_patterns::get_state_pattern;
 use crate::tasks::config_manager::get_shutdown_wait_duration_ms;
+use crate::tasks::host_watchdog::{
+    HOST_WATCHDOG_EVENT_CHANNEL, HostWatchdogEvents, is_host_watchdog_enabled,
+};
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
 use alloc::vec::Vec;
@@ -26,8 +29,10 @@ pub enum HalpiStates {
     OffNoVin,
     OffCharging,
     Booting,
-    On,
-    Depleting,
+    OnNoWatchdog,
+    OnWithWatchdog,
+    DepletingNoWatchdog,
+    DepletingWithWatchdog,
     Shutdown,
     Off,
     WatchdogReboot,
@@ -40,7 +45,8 @@ pub enum StateMachineEvents {
     Shutdown,
     SleepShutdown,
     Off,
-    WatchdogReboot,
+    EnableWatchdog(bool),
+    WatchdogAlert,
 }
 
 pub type StateMachineChannelType = channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 8>;
@@ -58,7 +64,8 @@ pub enum Event {
     Shutdown,
     SleepShutdown,
     Off,
-    WatchdogReboot,
+    WatchdogAlert,
+    EnableWatchdog(bool),
 }
 
 /// GPIO outputs that are controlled by the state machine task.
@@ -144,9 +151,14 @@ pub struct HalpiStateMachine {}
 )]
 impl HalpiStateMachine {
     async fn before_transition(&mut self, source: &State, target: &State) {
-        info!("Transitioning from {:?} to {:?}", defmt::Debug2Format(source), defmt::Debug2Format(target));
+        info!(
+            "Transitioning from {:?} to {:?}",
+            defmt::Debug2Format(source),
+            defmt::Debug2Format(target)
+        );
     }
 
+    /// Turned off and no voltage on VIN.
     #[allow(unused_variables)]
     #[state(entry_action = "enter_off_no_vin")]
     async fn off_no_vin(&mut self, event: &Event, context: &mut Context) -> Outcome<State> {
@@ -161,6 +173,7 @@ impl HalpiStateMachine {
         context.outputs.power_off();
     }
 
+    /// Turned off, but supercap is charging.
     #[allow(unused_variables)]
     #[state(entry_action = "enter_off_charging")]
     async fn off_charging(&mut self, event: &Event, context: &mut Context) -> Outcome<State> {
@@ -176,10 +189,11 @@ impl HalpiStateMachine {
         context.set_led_pattern(&HalpiStates::OffCharging).await;
     }
 
+    /// 5V rail is powered on and we're waiting for the CM5 3.3V rail to come up.
     #[state(entry_action = "enter_booting")]
     async fn booting(event: &Event) -> Outcome<State> {
         match event {
-            Event::CmOn => Transition(State::on()),
+            Event::CmOn => Transition(State::on_no_watchdog()),
             Event::VinPowerOff => Transition(State::off_no_vin()),
             _ => Super,
         }
@@ -191,11 +205,11 @@ impl HalpiStateMachine {
         context.set_led_pattern(&HalpiStates::Booting).await;
     }
 
+    /// Superstate for all situations where the system is powered on and running.
     #[allow(unused_variables)]
-    #[state(entry_action = "enter_on")]
+    #[superstate]
     async fn on(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
-            Event::VinPowerOff => Transition(State::depleting(Instant::now())),
             Event::CmOff => {
                 SCB::sys_reset();
             }
@@ -203,41 +217,98 @@ impl HalpiStateMachine {
         }
     }
 
-    #[action]
-    async fn enter_on(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::On).await;
+    /// Powered on, but no watchdog enabled.
+    #[allow(unused_variables)]
+    #[state(superstate = "on", entry_action = "enter_on_no_watchdog")]
+    async fn on_no_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::EnableWatchdog(true) => Transition(State::on_with_watchdog()),
+            Event::VinPowerOff => Transition(State::depleting_no_watchdog(Instant::now())),
+            _ => Super,
+        }
     }
 
+    #[action]
+    async fn enter_on_no_watchdog(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::OnNoWatchdog).await;
+        HOST_WATCHDOG_EVENT_CHANNEL
+            .send(HostWatchdogEvents::EnableWatchdog(false))
+            .await;
+    }
+
+    /// Powered on with watchdog enabled.
     #[allow(unused_variables)]
-    #[state(entry_action = "enter_depleting")]
-    async fn depleting(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
+    #[state(superstate = "on", entry_action = "enter_on_with_watchdog")]
+    async fn on_with_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::EnableWatchdog(false) => Transition(State::on_no_watchdog()),
+            Event::VinPowerOff => Transition(State::depleting_with_watchdog()),
+            _ => Super,
+        }
+    }
+
+    #[action]
+    async fn enter_on_with_watchdog(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::OnWithWatchdog).await;
+        HOST_WATCHDOG_EVENT_CHANNEL
+            .send(HostWatchdogEvents::EnableWatchdog(true))
+            .await;
+    }
+
+    /// If the host watchdog is not enabled, we will trigger shutdown after a timeout.
+    #[allow(unused_variables)]
+    #[state(superstate = "on", entry_action = "enter_depleting_no_watchdog")]
+    async fn depleting_no_watchdog(
+        entry_time: &mut Instant,
+        event: &Event,
+        context: &mut Context,
+    ) -> Outcome<State> {
         match event {
             Event::Tick => {
                 let now = Instant::now();
                 if now.duration_since(*entry_time)
                     > Duration::from_millis(DEFAULT_DEPLETING_TIMEOUT_MS as u64)
                 {
-                    Transition(State::off_no_vin())
+                    Transition(State::shutdown(Instant::now()))
                 } else {
                     Super
                 }
             }
-            Event::VinPowerOn => Transition(State::on()),
-            Event::CmOff => Transition(State::off_no_vin()),
+            Event::VinPowerOn => Transition(State::on_no_watchdog()),
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_depleting(entry_time: &mut Instant, context: &mut Context) {
+    async fn enter_depleting_no_watchdog(entry_time: &mut Instant, context: &mut Context) {
         *entry_time = Instant::now();
-        context.set_led_pattern(&HalpiStates::Depleting).await;
-        *entry_time = Instant::now();
+        context.set_led_pattern(&HalpiStates::DepletingNoWatchdog).await;
     }
 
+    /// If the host watchdog is enabled, we will wait for the host to initiate shutdown
+    #[allow(unused_variables)]
+    #[state(superstate = "on", entry_action = "enter_depleting_with_watchdog")]
+    async fn depleting_with_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::Shutdown => Transition(State::shutdown(Instant::now())),
+            Event::VinPowerOn => Transition(State::on_with_watchdog()),
+            _ => Super,
+        }
+    }
+
+    #[action]
+    async fn enter_depleting_with_watchdog(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::DepletingWithWatchdog).await;
+    }
+
+    /// Shutdown state, where the system is waiting for the shutdown to complete.
     #[allow(unused_variables)]
     #[state(entry_action = "enter_shutdown")]
-    async fn shutdown(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
+    async fn shutdown(
+        entry_time: &mut Instant,
+        event: &Event,
+        context: &mut Context,
+    ) -> Outcome<State> {
         match event {
             Event::Tick => {
                 let shutdown_wait_duration_ms = get_shutdown_wait_duration_ms().await;
@@ -250,7 +321,7 @@ impl HalpiStateMachine {
                     Super
                 }
             }
-            Event::CmOn => Transition(State::off(Instant::now())),
+            Event::CmOff => Transition(State::off(Instant::now())),
             _ => Super,
         }
     }
@@ -263,14 +334,16 @@ impl HalpiStateMachine {
         context.set_led_pattern(&HalpiStates::Shutdown).await;
     }
 
+    /// Turned off. Will reboot after 5 seconds if no VIN power is detected.
     #[allow(unused_variables)]
     #[state(entry_action = "enter_off")]
     async fn off(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
-            Event::VinPowerOn => Transition(State::off_charging()),
             Event::Tick => {
                 let now = Instant::now();
-                if now.duration_since(*entry_time) > Duration::from_secs(5) {
+                if now.duration_since(*entry_time)
+                    > Duration::from_millis(OFF_STATE_DURATION_MS as u64)
+                {
                     SCB::sys_reset();
                 }
                 Handled
@@ -285,15 +358,15 @@ impl HalpiStateMachine {
         context.set_led_pattern(&HalpiStates::Off).await;
     }
 
+    // This state is triggered if the host watchdog is enabled and a watchdog timeout occurs.
     #[allow(unused_variables)]
-    #[state(entry_action = "enter_watchdog_reboot")]
-    async fn watchdog_reboot(
+    #[state(superstate = "on", entry_action = "enter_watchdog_alert")]
+    async fn watchdog_alert(
         entry_time: &mut Instant,
         event: &Event,
         context: &mut Context,
     ) -> Outcome<State> {
         match event {
-            Event::CmOn => Transition(State::off(Instant::now())),
             Event::Tick => {
                 let now = Instant::now();
                 if now.duration_since(*entry_time)
@@ -304,20 +377,23 @@ impl HalpiStateMachine {
                     Super
                 }
             }
+            Event::VinPowerOn => Transition(State::on_with_watchdog()),
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_watchdog_reboot(context: &mut Context) {
+    async fn enter_watchdog_alert(context: &mut Context) {
         context.set_led_pattern(&HalpiStates::WatchdogReboot).await;
     }
 
+    /// Shutdown to a sleep state, where the system is waiting for the CM to power on.
     #[allow(unused_variables)]
     #[state(entry_action = "enter_sleep_shutdown")]
     async fn sleep_shutdown(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
-            Event::CmOn => Transition(State::sleep()),
+            // FIXME: Which events should be handled here?
+            Event::CmOff => Transition(State::sleep()),
             _ => Super,
         }
     }
@@ -327,11 +403,13 @@ impl HalpiStateMachine {
         context.set_led_pattern(&HalpiStates::SleepShutdown).await;
     }
 
+    /// Sleep state. The CM5 is shut down but may wake up on internal events.
     #[allow(unused_variables)]
     #[state(entry_action = "enter_sleep")]
     async fn sleep(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
-            Event::CmOn => Transition(State::off_no_vin()),
+            // FIXME: Which events should be handled here?
+            Event::CmOn => Transition(State::on_no_watchdog()),
             _ => Super,
         }
     }
@@ -376,9 +454,9 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
                         .handle_with_context(&Event::Shutdown, &mut context)
                         .await;
                 }
-                StateMachineEvents::WatchdogReboot => {
+                StateMachineEvents::WatchdogAlert => {
                     let _ = state_machine
-                        .handle_with_context(&Event::WatchdogReboot, &mut context)
+                        .handle_with_context(&Event::WatchdogAlert, &mut context)
                         .await;
                 }
                 StateMachineEvents::SleepShutdown => {
@@ -389,6 +467,11 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
                 StateMachineEvents::Off => {
                     let _ = state_machine
                         .handle_with_context(&Event::Off, &mut context)
+                        .await;
+                }
+                StateMachineEvents::EnableWatchdog(enabled) => {
+                    let _ = state_machine
+                        .handle_with_context(&Event::EnableWatchdog(enabled), &mut context)
                         .await;
                 }
             }
