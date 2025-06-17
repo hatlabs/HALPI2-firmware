@@ -31,6 +31,8 @@ pub fn get_state_pattern(state: &HalpiStates) -> LEDPattern {
         HalpiStates::DepletingWithWatchdog => LEDPattern::new(vec![Box::new(SupercapBar::new(100, DARK_OLIVE_GREEN))]),
         HalpiStates::Shutdown => LEDPattern::new(vec![Box::new(SupercapBar::new(100, PURPLE))]),
         HalpiStates::Off => LEDPattern::new(vec![Box::new(OneColor::new(100, BLACK))]),
-        _ => todo!(),
+        HalpiStates::WatchdogAlert => LEDPattern::new(vec![Box::new(OneColor::new(100, RED))]),
+        HalpiStates::SleepShutdown => LEDPattern::new(vec![Box::new(OneColor::new(100, BLUE))]),
+        HalpiStates::Sleep => LEDPattern::new(vec![Box::new(OneColor::new(100, DARK_GRAY))]),
     }
 }

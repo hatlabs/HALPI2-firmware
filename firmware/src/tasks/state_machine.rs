@@ -1,8 +1,5 @@
 use crate::led_patterns::get_state_pattern;
 use crate::tasks::config_manager::get_shutdown_wait_duration_ms;
-use crate::tasks::host_watchdog::{
-    HOST_WATCHDOG_EVENT_CHANNEL, HostWatchdogEvents, is_host_watchdog_enabled,
-};
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
 use alloc::vec::Vec;
@@ -35,7 +32,7 @@ pub enum HalpiStates {
     DepletingWithWatchdog,
     Shutdown,
     Off,
-    WatchdogReboot,
+    WatchdogAlert,
     SleepShutdown,
     Sleep,
 }
@@ -45,11 +42,11 @@ pub enum StateMachineEvents {
     Shutdown,
     SleepShutdown,
     Off,
-    EnableWatchdog(bool),
-    WatchdogAlert,
+    SetHostWatchdogTimeout(u16),
+    HostWatchdogPing,
 }
 
-pub type StateMachineChannelType = channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 8>;
+pub type StateMachineChannelType = channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 16>;
 pub static STATE_MACHINE_EVENT_CHANNEL: StateMachineChannelType = channel::Channel::new();
 
 // Events used by the state machine
@@ -64,8 +61,8 @@ pub enum Event {
     Shutdown,
     SleepShutdown,
     Off,
-    WatchdogAlert,
-    EnableWatchdog(bool),
+    SetWatchdogTimeout(u16),
+    WatchdogPing,
 }
 
 /// GPIO outputs that are controlled by the state machine task.
@@ -113,6 +110,8 @@ pub struct Context {
     pub outputs: Outputs,
     pub power_button_channel: &'static PowerButtonChannelType,
     pub led_blinker_channel: &'static LEDBlinkerChannelType,
+    pub host_watchdog_timeout_ms: u16,
+    pub host_watchdog_last_ping: Instant,
 }
 
 impl Context {
@@ -120,11 +119,14 @@ impl Context {
         outputs: Outputs,
         power_button_channel: &'static PowerButtonChannelType,
         led_blinker_channel: &'static LEDBlinkerChannelType,
+        host_watchdog_timeout_ms: u16,
     ) -> Self {
         Context {
             outputs,
             power_button_channel,
             led_blinker_channel,
+            host_watchdog_timeout_ms,
+            host_watchdog_last_ping: Instant::now(),
         }
     }
 
@@ -211,7 +213,11 @@ impl HalpiStateMachine {
     async fn on(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::CmOff => {
-                SCB::sys_reset();
+                Transition(State::off(Instant::now()))
+            }
+            Event::WatchdogPing => {
+                context.host_watchdog_last_ping = Instant::now();
+                Handled
             }
             _ => Super,
         }
@@ -222,7 +228,14 @@ impl HalpiStateMachine {
     #[state(superstate = "on", entry_action = "enter_on_no_watchdog")]
     async fn on_no_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
-            Event::EnableWatchdog(true) => Transition(State::on_with_watchdog()),
+            Event::SetWatchdogTimeout(timeout) => {
+                context.host_watchdog_timeout_ms = *timeout;
+                if *timeout > 0 {
+                    Transition(State::on_with_watchdog())
+                } else {
+                    Super
+                }
+            }
             Event::VinPowerOff => Transition(State::depleting_no_watchdog(Instant::now())),
             _ => Super,
         }
@@ -231,9 +244,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_on_no_watchdog(context: &mut Context) {
         context.set_led_pattern(&HalpiStates::OnNoWatchdog).await;
-        HOST_WATCHDOG_EVENT_CHANNEL
-            .send(HostWatchdogEvents::EnableWatchdog(false))
-            .await;
+        context.host_watchdog_timeout_ms = 0; // Disable watchdog
     }
 
     /// Powered on with watchdog enabled.
@@ -241,7 +252,29 @@ impl HalpiStateMachine {
     #[state(superstate = "on", entry_action = "enter_on_with_watchdog")]
     async fn on_with_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
-            Event::EnableWatchdog(false) => Transition(State::on_no_watchdog()),
+            Event::Tick => {
+                // If the host watchdog is enabled, we will send a ping to the watchdog task.
+                if context.host_watchdog_timeout_ms == 0 {
+                    warn!("Host watchdog is disabled, but we are in the on_with_watchdog state.");
+                    // Transition to the no watchdog state if the timeout is 0.
+                    return Transition(State::on_no_watchdog());
+                }
+                if Instant::now().duration_since(context.host_watchdog_last_ping)
+                    > Duration::from_millis(context.host_watchdog_timeout_ms as u64)
+                {
+                    Transition(State::watchdog_alert(Instant::now()))
+                } else {
+                    Super
+                }
+            }
+            Event::SetWatchdogTimeout(timeout) => {
+                context.host_watchdog_timeout_ms = *timeout;
+                if *timeout == 0 {
+                    Transition(State::on_no_watchdog())
+                } else {
+                    Transition(State::on_with_watchdog())
+                }
+            }
             Event::VinPowerOff => Transition(State::depleting_with_watchdog()),
             _ => Super,
         }
@@ -250,9 +283,6 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_on_with_watchdog(context: &mut Context) {
         context.set_led_pattern(&HalpiStates::OnWithWatchdog).await;
-        HOST_WATCHDOG_EVENT_CHANNEL
-            .send(HostWatchdogEvents::EnableWatchdog(true))
-            .await;
     }
 
     /// If the host watchdog is not enabled, we will trigger shutdown after a timeout.
@@ -282,7 +312,9 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_depleting_no_watchdog(entry_time: &mut Instant, context: &mut Context) {
         *entry_time = Instant::now();
-        context.set_led_pattern(&HalpiStates::DepletingNoWatchdog).await;
+        context
+            .set_led_pattern(&HalpiStates::DepletingNoWatchdog)
+            .await;
     }
 
     /// If the host watchdog is enabled, we will wait for the host to initiate shutdown
@@ -298,7 +330,9 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_depleting_with_watchdog(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::DepletingWithWatchdog).await;
+        context
+            .set_led_pattern(&HalpiStates::DepletingWithWatchdog)
+            .await;
     }
 
     /// Shutdown state, where the system is waiting for the shutdown to complete.
@@ -344,9 +378,11 @@ impl HalpiStateMachine {
                 if now.duration_since(*entry_time)
                     > Duration::from_millis(OFF_STATE_DURATION_MS as u64)
                 {
-                    SCB::sys_reset();
+                    //SCB::sys_reset();
+                    Transition(State::off_no_vin())
+                } else {
+                    Super
                 }
-                Handled
             }
             _ => Super,
         }
@@ -384,7 +420,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_watchdog_alert(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::WatchdogReboot).await;
+        context.set_led_pattern(&HalpiStates::WatchdogAlert).await;
     }
 
     /// Shutdown to a sleep state, where the system is waiting for the CM to power on.
@@ -431,11 +467,12 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
         outputs,
         &POWER_BUTTON_EVENT_CHANNEL,
         &LED_BLINKER_EVENT_CHANNEL,
+        0, // Host watchdog is initially disabled
     );
 
     let mut state_machine = HalpiStateMachine::default().state_machine();
 
-    let mut ticker = Ticker::every(Duration::from_millis(500));
+    let mut ticker = Ticker::every(Duration::from_millis(50));
 
     let receiver = STATE_MACHINE_EVENT_CHANNEL.receiver();
 
@@ -445,41 +482,32 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
         // Handle state machine transitions
         ticker.next().await;
 
-        if !receiver.is_empty() {
+        let mut events_to_process = Vec::new();
+
+        while !receiver.is_empty() {
             // Check for events from the channel
             let event = receiver.receive().await;
             match event {
                 StateMachineEvents::Shutdown => {
-                    let _ = state_machine
-                        .handle_with_context(&Event::Shutdown, &mut context)
-                        .await;
+                    events_to_process.push(Event::Shutdown);
                 }
-                StateMachineEvents::WatchdogAlert => {
-                    let _ = state_machine
-                        .handle_with_context(&Event::WatchdogAlert, &mut context)
-                        .await;
+                StateMachineEvents::SetHostWatchdogTimeout(timeout) => {
+                    // events_to_process.push(Event::SetWatchdogTimeout(timeout));
+                }
+                StateMachineEvents::HostWatchdogPing => {
+                    events_to_process.push(Event::WatchdogPing);
                 }
                 StateMachineEvents::SleepShutdown => {
-                    let _ = state_machine
-                        .handle_with_context(&Event::SleepShutdown, &mut context)
-                        .await;
+                    events_to_process.push(Event::SleepShutdown);
                 }
                 StateMachineEvents::Off => {
-                    let _ = state_machine
-                        .handle_with_context(&Event::Off, &mut context)
-                        .await;
-                }
-                StateMachineEvents::EnableWatchdog(enabled) => {
-                    let _ = state_machine
-                        .handle_with_context(&Event::EnableWatchdog(enabled), &mut context)
-                        .await;
+                    events_to_process.push(Event::Off);
                 }
             }
         }
 
         // Generate events based on current inputs
         let inputs = INPUTS.lock().await;
-        let mut events_to_process = Vec::new();
 
         // Check VIN power
         if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {

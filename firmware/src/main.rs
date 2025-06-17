@@ -4,11 +4,9 @@
 extern crate alloc;
 
 use config::FLASH_SIZE;
-use embassy_rp::watchdog::Watchdog;
-use embassy_rp::Peri;
 use embassy_rp::flash::Async;
-use embassy_rp::multicore::{Stack, spawn_core1};
-use embassy_rp::peripherals::WATCHDOG;
+use embassy_rp::multicore::Stack;
+use embassy_rp::watchdog::Watchdog;
 
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex, once_lock::OnceLock};
 use embassy_time::Duration;
@@ -22,7 +20,7 @@ static mut CORE1_STACK: Stack<8192> = Stack::new();
 static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
-use defmt::{debug, error, info};
+use defmt::{error, info};
 use embassy_executor::Executor;
 use embassy_executor::Spawner;
 
@@ -67,9 +65,7 @@ async fn main(spawner: Spawner) {
     let watchdog_peripheral = p.WATCHDOG;
     let mut watchdog = Watchdog::new(watchdog_peripheral);
     watchdog.start(Duration::from_secs(8));
-    match OM_WATCHDOG
-        .init(Mutex::<NoopRawMutex, _>::new(watchdog))
-    {
+    match OM_WATCHDOG.init(Mutex::<NoopRawMutex, _>::new(watchdog)) {
         Ok(_) => info!("Watchdog initialized successfully"),
         Err(_) => error!("Failed to initialize watchdog"),
     }
@@ -84,8 +80,6 @@ async fn main(spawner: Spawner) {
         Err(_) => error!("Failed to initialize flash"),
     }
     let flash = OM_FLASH.get().await;
-
-
 
     // Spawn the async tasks
     spawner
@@ -112,10 +106,6 @@ async fn main(spawner: Spawner) {
         .spawn(tasks::power_button::power_button_output_task(
             r.power_button,
         ))
-        .unwrap();
-
-    spawner
-        .spawn(tasks::host_watchdog::host_watchdog_task())
         .unwrap();
 
     spawner

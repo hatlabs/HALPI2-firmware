@@ -12,14 +12,8 @@ use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
 };
 use crate::tasks::gpio_input::INPUTS;
-use crate::tasks::host_watchdog::{
-    HOST_WATCHDOG_EVENT_CHANNEL, HostWatchdogEvents, get_host_watchdog_timeout_ms,
-    set_host_watchdog_timeout_ms,
-};
 use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
-use crate::tasks::state_machine::{
-    StateMachineEvents, HalpiStates, STATE_MACHINE_EVENT_CHANNEL
-};
+use crate::tasks::state_machine::{HalpiStates, STATE_MACHINE_EVENT_CHANNEL, StateMachineEvents};
 use crc::{CRC_32_ISO_HDLC, Crc};
 use defmt::{debug, error, info};
 use embassy_executor::task;
@@ -130,6 +124,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
     let mut device = i2c_slave::I2cSlave::new(r.i2c, r.scl, r.sda, Irqs, config);
     let mut dfu_crc_error: bool = false;
     let mut data_length_error: bool = false;
+    let mut host_watchdog_timeout_ms = 0u16; // Keep a local copy of the watchdog timeout
 
     let state = 0;
 
@@ -191,7 +186,10 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         } else {
                             let timeout = u16::from_be_bytes([buf[1], buf[2]]);
                             info!("Setting watchdog timeout to {} ms", timeout);
-                            set_host_watchdog_timeout_ms(timeout).await;
+                            STATE_MACHINE_EVENT_CHANNEL
+                                .send(StateMachineEvents::SetHostWatchdogTimeout(timeout))
+                                .await;
+                            host_watchdog_timeout_ms = timeout; // Update local copy
                         }
                     }
                     // Set supercap power-on threshold voltage
@@ -351,7 +349,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x10 => respond(&mut device, &[inputs.pg_5v as u8]).await,
                     // Query watchdog timeout
                     0x12 => {
-                        let timeout = get_host_watchdog_timeout_ms().await;
+                        let timeout = host_watchdog_timeout_ms;
                         let timeout_bytes = timeout.to_be_bytes();
                         respond(&mut device, &timeout_bytes).await
                     }
@@ -432,8 +430,8 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
             Err(e) => error!("{}", e),
         }
         // Update watchdog on any I2C activity
-        HOST_WATCHDOG_EVENT_CHANNEL
-            .send(HostWatchdogEvents::Ping)
+        STATE_MACHINE_EVENT_CHANNEL
+            .send(StateMachineEvents::HostWatchdogPing)
             .await;
     }
 }
