@@ -2,8 +2,8 @@ use crate::led_patterns::get_state_pattern;
 use crate::tasks::config_manager::get_shutdown_wait_duration_ms;
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
-use core::fmt::Debug;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 use cortex_m::peripheral::SCB;
 use defmt::*;
 use embassy_executor::task;
@@ -20,8 +20,9 @@ use crate::tasks::gpio_input::INPUTS;
 use super::led_blinker::LEDBlinkerChannelType;
 use super::power_button::PowerButtonChannelType;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TargetState {
+pub enum HalpiStates {
     OffNoVin,
     OffCharging,
     Booting,
@@ -34,11 +35,12 @@ pub enum TargetState {
     Sleep,
 }
 
+#[allow(dead_code)]
 pub enum StateMachineEvents {
-    TriggerShutdown,
-    TriggerSleepShutdown,
-    TriggerOff,
-    TriggerWatchdogReboot,
+    Shutdown,
+    SleepShutdown,
+    Off,
+    WatchdogReboot,
 }
 
 pub type StateMachineChannelType = channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 8>;
@@ -60,7 +62,7 @@ pub enum Event {
 }
 
 /// GPIO outputs that are controlled by the state machine task.
-struct Outputs {
+pub struct Outputs {
     pub ven: Output<'static>,
     pub pcie_sleep: Output<'static>,
     pub dis_usb3: Output<'static>,
@@ -104,7 +106,6 @@ pub struct Context {
     pub outputs: Outputs,
     pub power_button_channel: &'static PowerButtonChannelType,
     pub led_blinker_channel: &'static LEDBlinkerChannelType,
-    pub last_state_entry: Instant,
 }
 
 impl Context {
@@ -117,11 +118,10 @@ impl Context {
             outputs,
             power_button_channel,
             led_blinker_channel,
-            last_state_entry: Instant::now(),
         }
     }
 
-    async fn set_led_pattern(&self, state: &TargetState) {
+    async fn set_led_pattern(&self, state: &HalpiStates) {
         let _ = self
             .led_blinker_channel
             .send(LEDBlinkerEvents::SetPattern(get_state_pattern(state)))
@@ -131,33 +131,20 @@ impl Context {
     async fn send_power_button_event(&self, event: PowerButtonEvents) {
         let _ = self.power_button_channel.send(event).await;
     }
-
-    fn time_since_entry(&self) -> Duration {
-        Instant::now().duration_since(self.last_state_entry)
-    }
-
-    fn update_entry_time(&mut self) {
-        self.last_state_entry = Instant::now();
-    }
 }
 
 #[derive(Debug, Default)]
 pub struct HalpiStateMachine {}
 
 #[state_machine(
-    initial = "State::init()",
+    initial = "State::off_no_vin()",
     state(derive(Debug)),
     superstate(derive(Debug))
 )]
 impl HalpiStateMachine {
-
-    #[state()]
-    async fn init(event: &Event) -> Outcome<State> {
-        Transition(State::off_no_vin())
-    }
-
-    #[state(, entry_action = "enter_off_no_vin")]
-    async fn off_no_vin(event: &Event) -> Outcome<State> {
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_off_no_vin")]
+    async fn off_no_vin(&mut self, event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::VinPowerOn => Transition(State::off_charging()),
             _ => Super,
@@ -165,13 +152,13 @@ impl HalpiStateMachine {
     }
 
     #[action]
-    async fn enter_off_no_vin(_event: &Event, context: &mut Context) -> Outcome<State> {
+    async fn enter_off_no_vin(&mut self, context: &mut Context) {
         context.outputs.power_off();
-        Handled
     }
 
-    #[state(, entry_action = "enter_off_charging")]
-    async fn off_charging(event: &Event) -> Outcome<State> {
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_off_charging")]
+    async fn off_charging(&mut self, event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::VscapReady => Transition(State::booting()),
             Event::VinPowerOff => Transition(State::off_no_vin()),
@@ -180,12 +167,11 @@ impl HalpiStateMachine {
     }
 
     #[action]
-    async fn enter_off_charging(_event: &Event, context: &mut Context) -> Outcome<State> {
-        context.set_led_pattern(&TargetState::OffCharging).await;
-        Handled
+    async fn enter_off_charging(&mut self, context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::OffCharging).await;
     }
 
-    #[state(, entry_action = "enter_booting")]
+    #[state(entry_action = "enter_booting")]
     async fn booting(event: &Event) -> Outcome<State> {
         match event {
             Event::CmOn => Transition(State::on()),
@@ -195,35 +181,31 @@ impl HalpiStateMachine {
     }
 
     #[action]
-    async fn enter_booting(_event: &Event, context: &mut Context) -> Outcome<State> {
+    async fn enter_booting(context: &mut Context) {
         context.outputs.power_on();
-        context.set_led_pattern(&TargetState::Booting).await;
-        Handled
+        context.set_led_pattern(&HalpiStates::Booting).await;
     }
 
-    #[state(, entry_action = "enter_on")]
-    async fn on(event: &Event) -> Outcome<State> {
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_on")]
+    async fn on(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::VinPowerOff => Transition(State::depleting(Instant::now())),
             Event::CmOff => {
                 SCB::sys_reset();
-                Transition(State::off_no_vin())
             }
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_on(event: &Event, context: &mut Context) -> Outcome<State> {
-        context.set_led_pattern(&TargetState::On).await;
-        Handled
+    async fn enter_on(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::On).await;
     }
 
-    #[state(, entry_action = "enter_depleting")]
-    async fn depleting(
-        entry_time: &mut Instant,
-        event: &Event,
-    ) -> Outcome<State> {
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_depleting")]
+    async fn depleting(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::Tick => {
                 let now = Instant::now();
@@ -242,48 +224,43 @@ impl HalpiStateMachine {
     }
 
     #[action]
-    async fn enter_depleting(
-        entry_time: &mut Instant,
-        _event: &Event,
-        context: &mut Context,
-    ) -> Outcome<State> {
+    async fn enter_depleting(entry_time: &mut Instant, context: &mut Context) {
         *entry_time = Instant::now();
-        context.set_led_pattern(&TargetState::Depleting).await;
-        context.update_entry_time();
-        Handled
+        context.set_led_pattern(&HalpiStates::Depleting).await;
+        *entry_time = Instant::now();
     }
 
-    #[state(, entry_action = "enter_shutdown")]
-    async fn shutdown(event: &Event, context: &mut Context) -> Outcome<State> {
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_shutdown")]
+    async fn shutdown(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::Tick => {
                 let shutdown_wait_duration_ms = get_shutdown_wait_duration_ms().await;
                 let now = Instant::now();
-                if now.duration_since(context.last_state_entry)
+                if now.duration_since(*entry_time)
                     > Duration::from_millis(shutdown_wait_duration_ms as u64)
                 {
                     Transition(State::off(Instant::now()))
                 } else {
                     Super
                 }
-            },
+            }
             Event::CmOn => Transition(State::off(Instant::now())),
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_shutdown(event: &Event, context: &mut Context) -> Outcome<State> {
+    async fn enter_shutdown(context: &mut Context) {
         context
             .send_power_button_event(PowerButtonEvents::DoubleClick)
             .await;
-        context.set_led_pattern(&TargetState::Shutdown).await;
-        context.update_entry_time();
-        Handled
+        context.set_led_pattern(&HalpiStates::Shutdown).await;
     }
 
-    #[state(, entry_action = "enter_off")]
-    async fn off(entry_time: &mut Instant, event: &Event) -> Outcome<State> {
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_off")]
+    async fn off(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::VinPowerOn => Transition(State::off_charging()),
             Event::Tick => {
@@ -291,30 +268,32 @@ impl HalpiStateMachine {
                 if now.duration_since(*entry_time) > Duration::from_secs(5) {
                     SCB::sys_reset();
                 }
-                Super
+                Handled
             }
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_off(_entry_time: &mut Instant, _event: &Event, context: &mut Context) -> Outcome<State> {
+    async fn enter_off(context: &mut Context) {
         context.outputs.power_off();
-        context.set_led_pattern(&TargetState::Off).await;
-        context.update_entry_time();
-        Handled
+        context.set_led_pattern(&HalpiStates::Off).await;
     }
 
-    #[state(
-        ,
-        entry_action = "enter_watchdog_reboot"
-    )]
-    async fn watchdog_reboot(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_watchdog_reboot")]
+    async fn watchdog_reboot(
+        entry_time: &mut Instant,
+        event: &Event,
+        context: &mut Context,
+    ) -> Outcome<State> {
         match event {
             Event::CmOn => Transition(State::off(Instant::now())),
             Event::Tick => {
                 let now = Instant::now();
-                if now.duration_since(*entry_time) > Duration::from_secs(5) {
+                if now.duration_since(*entry_time)
+                    > Duration::from_secs(HOST_WATCHDOG_REBOOT_DURATION_MS as u64)
+                {
                     Transition(State::off(Instant::now()))
                 } else {
                     Super
@@ -325,13 +304,12 @@ impl HalpiStateMachine {
     }
 
     #[action]
-    async fn enter_watchdog_reboot(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
-        context.set_led_pattern(&TargetState::WatchdogReboot).await;
-        context.update_entry_time();
-        Handled
+    async fn enter_watchdog_reboot(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::WatchdogReboot).await;
     }
 
-    #[state(, entry_action = "enter_sleep_shutdown")]
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_sleep_shutdown")]
     async fn sleep_shutdown(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::CmOn => Transition(State::sleep()),
@@ -340,13 +318,13 @@ impl HalpiStateMachine {
     }
 
     #[action]
-    async fn enter_sleep_shutdown(event: &Event, context: &mut Context) -> Outcome<State> {
-        context.set_led_pattern(&TargetState::SleepShutdown).await;
-        Handled
+    async fn enter_sleep_shutdown(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::SleepShutdown).await;
     }
 
-    #[state(, entry_action = "enter_sleep")]
-    async fn sleep(event: &Event) -> Outcome<State> {
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_sleep")]
+    async fn sleep(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::CmOn => Transition(State::off_no_vin()),
             _ => Super,
@@ -354,9 +332,8 @@ impl HalpiStateMachine {
     }
 
     #[action]
-    async fn enter_sleep(event: &Event, context: &mut Context) -> Outcome<State> {
-        context.set_led_pattern(&TargetState::Sleep).await;
-        Handled
+    async fn enter_sleep(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::Sleep).await;
     }
 }
 
@@ -389,18 +366,26 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
             // Check for events from the channel
             let event = receiver.receive().await;
             match event {
-                StateMachineEvents::TriggerShutdown => {
-                    state_machine.handle_with_context(&mut Event::Shutdown, &mut context);
-                },
-                StateMachineEvents::TriggerWatchdogReboot => {
-                    state_machine.handle_with_context(&mut Event::WatchdogReboot, &mut context);
-                },
-                StateMachineEvents::TriggerSleepShutdown => {
-                    state_machine.handle_with_context(&mut Event::SleepShutdown, &mut context);
-                },
-                StateMachineEvents::TriggerOff => {
-                    state_machine.handle_with_context(&mut Event::Off, &mut context);
-                },
+                StateMachineEvents::Shutdown => {
+                    let _ = state_machine
+                        .handle_with_context(&Event::Shutdown, &mut context)
+                        .await;
+                }
+                StateMachineEvents::WatchdogReboot => {
+                    let _ = state_machine
+                        .handle_with_context(&Event::WatchdogReboot, &mut context)
+                        .await;
+                }
+                StateMachineEvents::SleepShutdown => {
+                    let _ = state_machine
+                        .handle_with_context(&Event::SleepShutdown, &mut context)
+                        .await;
+                }
+                StateMachineEvents::Off => {
+                    let _ = state_machine
+                        .handle_with_context(&Event::Off, &mut context)
+                        .await;
+                }
             }
         }
 
@@ -431,5 +416,12 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
         events_to_process.push(Event::Tick);
 
         drop(inputs);
+
+        for event in events_to_process {
+            // Handle each event
+            state_machine
+                .handle_with_context(&event, &mut context)
+                .await;
+        }
     }
 }

@@ -106,7 +106,7 @@ pub async fn host_watchdog_task() {
             // Reset the system
             warn!("Watchdog timeout");
             STATE_MACHINE_EVENT_CHANNEL
-                .send(StateMachineEvents::TriggerWatchdogReboot)
+                .send(StateMachineEvents::WatchdogReboot)
                 .await;
             last_ping = now;
             // Update the stored last ping time

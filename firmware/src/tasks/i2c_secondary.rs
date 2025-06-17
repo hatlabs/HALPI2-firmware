@@ -18,7 +18,7 @@ use crate::tasks::host_watchdog::{
 };
 use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
 use crate::tasks::state_machine::{
-    StateMachineEvents, TargetState, STATE_MACHINE_EVENT_CHANNEL
+    StateMachineEvents, HalpiStates, STATE_MACHINE_EVENT_CHANNEL
 };
 use crc::{CRC_32_ISO_HDLC, Crc};
 use defmt::{debug, error, info};
@@ -172,7 +172,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                                     // Power off the Raspi
                                     info!("Powering off the Raspi");
                                     STATE_MACHINE_EVENT_CHANNEL
-                                        .send(StateMachineEvents::TriggerOff)
+                                        .send(StateMachineEvents::Off)
                                         .await;
                                 } else {
                                     error!("Raspi power is already off");
@@ -228,14 +228,14 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x30 => {
                         info!("Initiating shutdown");
                         STATE_MACHINE_EVENT_CHANNEL
-                            .send(StateMachineEvents::TriggerOff)
+                            .send(StateMachineEvents::Off)
                             .await;
                     }
                     // Initiate sleep shutdown
                     0x31 => {
                         info!("Initiating sleep shutdown");
                         STATE_MACHINE_EVENT_CHANNEL
-                            .send(StateMachineEvents::TriggerSleepShutdown)
+                            .send(StateMachineEvents::SleepShutdown)
                             .await;
                     }
                     // Start DFU process
