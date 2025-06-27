@@ -5,8 +5,11 @@ use crate::config::{
 };
 use crate::config_resources::I2CSecondaryResources;
 use crate::tasks::config_manager::{
-    get_vscap_power_off_threshold, get_vscap_power_on_threshold, set_vscap_power_off_threshold,
-    set_vscap_power_on_threshold,
+    get_vin_correction_scale, set_vin_correction_scale,
+    get_vscap_correction_scale, set_vscap_correction_scale,
+    get_iin_correction_scale, set_iin_correction_scale,
+    set_vscap_power_on_threshold, get_vscap_power_on_threshold,
+    set_vscap_power_off_threshold, get_vscap_power_off_threshold,
 };
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
@@ -45,6 +48,13 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Read  0x23: Query MCU temperature (2 bytes, scaled u16)
 // - Write 0x30: [ANY]: Initiate shutdown
 // - Write 0x31: [ANY]: Initiate sleep shutdown
+// - Read  0x50: Query VIN correction scale (4 bytes, f32)
+// - Write 0x50 [NN NN NN NN]: Set VIN correction scale to NNNNNNNN (f32, big-endian)
+// - Read  0x51: Query VSCAP correction scale (4 bytes, f32)
+// - Write 0x51 [NN NN NN NN]: Set VSCAP correction scale to NNNNNNNN (f32, big-endian)
+// - Read  0x52: Query IIN correction scale (4 bytes, f32)
+// - Write 0x52 [NN NN NN NN]: Set IIN correction scale to NNNNNNNN (f32, big-endian)
+
 //
 // Device Firmware Update (DFU) protocol:
 // - Write 0x40 [NN NN NN NN]: Start DFU, firmware size is NNNNNNNN bytes (u32, big-endian)
@@ -327,6 +337,39 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             .send(FlashWriteCommand::Abort)
                             .await;
                     }
+                    // Set VIN correction scale
+                    0x50 => {
+                        // Get value from the next 4 bytes
+                        if len != 6 {
+                            error!("Invalid VIN correction scale command length");
+                            continue;
+                        }
+                        let value = f32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]);
+                        info!("Setting VIN correction scale to {}", value);
+                        set_vin_correction_scale(value).await;
+                    }
+                    // Set VSCAP correction scale
+                    0x51 => {
+                        // Get value from the next 4 bytes
+                        if len != 6 {
+                            error!("Invalid VSCAP correction scale command length");
+                            continue;
+                        }
+                        let value = f32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]);
+                        info!("Setting VSCAP correction scale to {}", value);
+                        set_vscap_correction_scale(value).await;
+                    }
+                    // Set IIN correction scale
+                    0x52 => {
+                        // Get value from the next 4 bytes
+                        if len != 6 {
+                            error!("Invalid IIN correction scale command length");
+                            continue;
+                        }
+                        let value = f32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]);
+                        info!("Setting IIN correction scale to {}", value);
+                        set_iin_correction_scale(value).await;
+                    }
                     x => error!("Invalid Write command: {:02x}", x),
                 }
             }
@@ -423,6 +466,26 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         let blocks_written = FLASH_WRITER_STATUS.lock().await.blocks_received;
                         let blocks_written_bytes = blocks_written.to_be_bytes();
                         respond(&mut device, &blocks_written_bytes).await
+                    }
+                    // VIN Correction Scale
+                    0x50 => {
+                        // HALPI2 devices use little-endian for floating point values.
+                        // Convert the f32 value to bytes accordingly.
+                        let value = get_vin_correction_scale().await;
+                        let bytes = value.to_le_bytes();
+                        respond(&mut device, &bytes).await
+                    }
+                    // VSCAP Correction Scale
+                    0x51 => {
+                        let value = get_vscap_correction_scale().await;
+                        let bytes = value.to_le_bytes();
+                        respond(&mut device, &bytes).await
+                    }
+                    // IIN Correction Scale
+                    0x52 => {
+                        let value = get_iin_correction_scale().await;
+                        let bytes = value.to_le_bytes();
+                        respond(&mut device, &bytes).await
                     }
                     x => error!("Invalid Write Read command: 0x{:02x}", x),
                 }

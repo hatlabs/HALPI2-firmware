@@ -46,6 +46,9 @@ pub enum ConfigManagerEvents {
     ShutdownWaitDurationMs(u32),
     WatchdogTimeoutMs(u16),
     LedBrightness(u8),
+    VscapCorrectionScale(f32),
+    VinCorrectionScale(f32),
+    IinCorrectionScale(f32),
 }
 
 pub type ConfigManagerChannelType =
@@ -190,6 +193,9 @@ struct RuntimeConfig {
     pub shutdown_wait_duration_ms: u32,
     pub watchdog_timeout_ms: u16,
     pub led_brightness: u8,
+    pub vin_correction_scale: f32,
+    pub vscap_correction_scale: f32,
+    pub iin_correction_scale: f32,
 }
 
 impl RuntimeConfig {
@@ -200,6 +206,9 @@ impl RuntimeConfig {
         shutdown_wait_duration_ms: u32,
         watchdog_timeout_ms: u16,
         led_brightness: u8,
+        vin_correction_scale: f32,
+        vscap_correction_scale: f32,
+        iin_correction_scale: f32,
     ) -> Self {
         RuntimeConfig {
             vscap_power_on_threshold,
@@ -208,6 +217,9 @@ impl RuntimeConfig {
             shutdown_wait_duration_ms,
             watchdog_timeout_ms,
             led_brightness,
+            vin_correction_scale,
+            vscap_correction_scale,
+            iin_correction_scale,
         }
     }
 }
@@ -220,6 +232,9 @@ static RUNTIME_CONFIG: Mutex<CriticalSectionRawMutex, RuntimeConfig> =
         DEFAULT_SHUTDOWN_WAIT_DURATION_MS,
         HOST_WATCHDOG_DEFAULT_TIMEOUT_MS,
         DEFAULT_LED_BRIGHTNESS,
+        DEFAULT_VIN_CORRECTION_SCALE,
+        DEFAULT_VSCAP_CORRECTION_SCALE,
+        DEFAULT_IIN_CORRECTION_SCALE,
     ));
 
 pub async fn get_vscap_power_on_threshold() -> f32 {
@@ -248,6 +263,18 @@ pub async fn get_watchdog_timeout_ms() -> u16 {
 pub async fn get_led_brightness() -> u8 {
     let config = RUNTIME_CONFIG.lock().await;
     config.led_brightness
+}
+pub async fn get_vin_correction_scale() -> f32 {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.vin_correction_scale
+}
+pub async fn get_vscap_correction_scale() -> f32 {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.vscap_correction_scale
+}
+pub async fn get_iin_correction_scale() -> f32 {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.iin_correction_scale
 }
 pub async fn set_vscap_power_on_threshold(value: f32) {
     let mut config = RUNTIME_CONFIG.lock().await;
@@ -294,6 +321,27 @@ pub async fn set_led_brightness(value: u8) {
         .send(ConfigManagerEvents::LedBrightness(value))
         .await;
 }
+pub async fn set_vin_correction_scale(value: f32) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.vin_correction_scale = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::VinCorrectionScale(value))
+        .await;
+}
+pub async fn set_vscap_correction_scale(value: f32) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.vscap_correction_scale = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::VscapCorrectionScale(value))
+        .await;
+}
+pub async fn set_iin_correction_scale(value: f32) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.iin_correction_scale = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::IinCorrectionScale(value))
+        .await;
+}
 
 pub async fn init_config_manager(
     flash: &'static MFlashType<'static>,
@@ -310,13 +358,19 @@ pub async fn init_config_manager(
             .await
             .unwrap_or(None)
             .unwrap_or(DEFAULT_VSCAP_POWER_ON_THRESHOLD);
-        debug!("Received vscap power on threshold: {}", vscap_power_on_threshold);
+        debug!(
+            "Received vscap power on threshold: {}",
+            vscap_power_on_threshold
+        );
         let vscap_power_off_threshold = config_manager
             .get::<f32>(VSCAP_POWER_OFF_THRESHOLD_CONFIG_KEY)
             .await
             .unwrap_or(None)
             .unwrap_or(DEFAULT_VSCAP_POWER_OFF_THRESHOLD);
-        debug!("Received vscap power off threshold: {}", vscap_power_off_threshold);
+        debug!(
+            "Received vscap power off threshold: {}",
+            vscap_power_off_threshold
+        );
         let vin_power_threshold = config_manager
             .get::<f32>(VIN_POWER_THRESHOLD_CONFIG_KEY)
             .await
@@ -328,7 +382,10 @@ pub async fn init_config_manager(
             .await
             .unwrap_or(None)
             .unwrap_or(DEFAULT_SHUTDOWN_WAIT_DURATION_MS);
-        debug!("Received shutdown wait duration: {}", shutdown_wait_duration_ms);
+        debug!(
+            "Received shutdown wait duration: {}",
+            shutdown_wait_duration_ms
+        );
         let watchdog_timeout_ms = config_manager
             .get::<u16>(HOST_WATCHDOG_TIMEOUT_CONFIG_KEY)
             .await
@@ -407,6 +464,24 @@ pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
             ConfigManagerEvents::LedBrightness(value) => {
                 config_manager
                     .set(LED_BRIGHTNESS_CONFIG_KEY, &value)
+                    .await
+                    .unwrap();
+            }
+            ConfigManagerEvents::VinCorrectionScale(value) => {
+                config_manager
+                    .set(VIN_CORRECTION_SCALE_CONFIG_KEY, &value)
+                    .await
+                    .unwrap();
+            }
+            ConfigManagerEvents::VscapCorrectionScale(value) => {
+                config_manager
+                    .set(VSCAP_CORRECTION_SCALE_CONFIG_KEY, &value)
+                    .await
+                    .unwrap();
+            }
+            ConfigManagerEvents::IinCorrectionScale(value) => {
+                config_manager
+                    .set(IIN_CORRECTION_SCALE_CONFIG_KEY, &value)
                     .await
                     .unwrap();
             }
