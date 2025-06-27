@@ -13,17 +13,25 @@ pub const VIN_MAX_VALUE: f32 = 33.0; // V
 
 pub const IIN_MAX_VALUE: f32 = 3.3; // V; Maximum voltage for Iin
 
+// Time to wait for device to shut down gracefully.
+// Once this time is reached, the device will forcefully shut down.
 pub const DEFAULT_SHUTDOWN_WAIT_DURATION_MS: u32 = 60_000; // ms
 pub const SHUTDOWN_WAIT_DURATION_CONFIG_KEY: u16 = 0x1005;
+
+// Time to wait for the device to start shutting down once the power is cut.
+pub const DEFAULT_DEPLETING_TIMEOUT_MS: u32 = 5_000; // ms
+//pub const DEPLETING_TIMEOUT_CONFIG_KEY: u16 = 0x1007;
 
 // how long to stay in off state until restarting
 pub const OFF_STATE_DURATION_MS: u32 = 5000; // ms
 
+// Default timeout for the host watchdog. If the watchdog is not reset within this time,
+// the device will reboot.
 pub const HOST_WATCHDOG_DEFAULT_TIMEOUT_MS: u16 = 10_000; // ms
 pub const HOST_WATCHDOG_TIMEOUT_CONFIG_KEY: u16 = 0x1006; // Key for the watchdog timeout in the config
 
-// how long to keep VEN low in the event of watchdog reboot
-pub const HOST_WATCHDOG_REBOOT_DURATION_MS: u32 = 2000; // ms
+// how long to stay in the watchdog alert state before rebooting
+pub const HOST_WATCHDOG_REBOOT_DURATION_MS: u32 = 5000; // ms
 
 pub const FLASH_SIZE: usize = 4 * 1024 * 1024;
 

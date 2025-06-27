@@ -3,18 +3,18 @@ use alloc::vec;
 use smart_leds::colors::*;
 
 use crate::tasks::led_blinker::*;
-use crate::tasks::state_machine::StateMachine;
+use crate::tasks::state_machine::HalpiStates;
 
 // Provide LED Patterns for different state machine states
 
-pub fn get_state_pattern(state: &StateMachine) -> LEDPattern {
+pub fn get_state_pattern(state: &HalpiStates) -> LEDPattern {
     match state {
-        StateMachine::OffNoVin(_) => LEDPattern::new(vec![Box::new(Colors::new(
+        HalpiStates::OffNoVin => LEDPattern::new(vec![Box::new(Colors::new(
             100,
-            [RED, BLACK, BLACK, BLACK, BLACK],
+            [BLACK, BLACK, BLACK, BLACK, RED],
         ))]),
-        StateMachine::OffCharging(_) => LEDPattern::new(vec![Box::new(OneColor::new(1000, RED))]),
-        StateMachine::Booting(_) => LEDPattern::new(vec![
+        HalpiStates::OffCharging => LEDPattern::new(vec![Box::new(SupercapBar::new(1000, RED))]),
+        HalpiStates::Booting => LEDPattern::new(vec![
             Box::new(RoyalRainbow::new(1280, true)),
             Box::new(OneColor::new(1000, RED)),
             Box::new(OneColor::new(1000, GREEN)),
@@ -25,10 +25,14 @@ pub fn get_state_pattern(state: &StateMachine) -> LEDPattern {
             Box::new(OneColor::new(1000, WHITE)),
             Box::new(Off::new(1000)),
         ]),
-        StateMachine::On(_) => LEDPattern::new(vec![Box::new(OneColor::new(100, GREEN))]),
-        StateMachine::Depleting(_) => LEDPattern::new(vec![Box::new(OneColor::new(100, YELLOW))]),
-        StateMachine::Shutdown(_) => LEDPattern::new(vec![Box::new(OneColor::new(100, PURPLE))]),
-        StateMachine::Off(_) => LEDPattern::new(vec![Box::new(OneColor::new(100, BLACK))]),
-        _ => todo!(),
+        HalpiStates::OnNoWatchdog => LEDPattern::new(vec![Box::new(SupercapBar::new(100, YELLOW))]),
+        HalpiStates::OnWithWatchdog => LEDPattern::new(vec![Box::new(SupercapBar::new(100, GREEN))]),
+        HalpiStates::DepletingNoWatchdog => LEDPattern::new(vec![Box::new(SupercapBar::new(100, ORANGE))]),
+        HalpiStates::DepletingWithWatchdog => LEDPattern::new(vec![Box::new(SupercapBar::new(100, DARK_OLIVE_GREEN))]),
+        HalpiStates::Shutdown => LEDPattern::new(vec![Box::new(SupercapBar::new(100, PURPLE))]),
+        HalpiStates::Off => LEDPattern::new(vec![Box::new(OneColor::new(100, BLACK))]),
+        HalpiStates::WatchdogAlert => LEDPattern::new(vec![Box::new(OneColor::new(100, RED))]),
+        HalpiStates::SleepShutdown => LEDPattern::new(vec![Box::new(OneColor::new(100, BLUE))]),
+        HalpiStates::Sleep => LEDPattern::new(vec![Box::new(OneColor::new(100, DARK_GRAY))]),
     }
 }

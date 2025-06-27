@@ -201,7 +201,25 @@ jobs:
         - \`bootloader.elf/.uf2/.bin\` - Bootloader in all formats
         - \`firmware.elf/.uf2/.bin\` - Main firmware in all formats
         - \`halpi2-firmware_*.deb\` - Complete Debian package
-        - \`build-info.txt\` - Build metadata" \
+        - \`build-info.txt\` - Build metadata
+
+        ---
+
+        ## 📦 Release Template
+
+        ### What's new in this release
+
+        - _[Add highlights or major changes here]_
+
+        ### Changelog
+
+        - _[List all notable changes, bugfixes, and improvements]_
+
+        ### Upgrade notes
+
+        - _[Mention any special upgrade instructions or compatibility notes]_
+
+        " \
           artifacts/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,6 +1,8 @@
 use crate::led_patterns::get_state_pattern;
+use crate::tasks::config_manager::get_shutdown_wait_duration_ms;
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
+use alloc::vec::Vec;
 use core::fmt::Debug;
 use cortex_m::peripheral::SCB;
 use defmt::*;
@@ -9,6 +11,7 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel;
 use embassy_time::{Duration, Instant, Ticker};
+use statig::prelude::*;
 
 use crate::config::*;
 use crate::config_resources::StateMachineOutputResources;
@@ -17,15 +20,53 @@ use crate::tasks::gpio_input::INPUTS;
 use super::led_blinker::LEDBlinkerChannelType;
 use super::power_button::PowerButtonChannelType;
 
-pub enum StateMachineEvents {
-    SetState(StateMachine),
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HalpiStates {
+    OffNoVin,
+    OffCharging,
+    Booting,
+    OnNoWatchdog,
+    OnWithWatchdog,
+    DepletingNoWatchdog,
+    DepletingWithWatchdog,
+    Shutdown,
+    Off,
+    WatchdogAlert,
+    SleepShutdown,
+    Sleep,
 }
 
-pub type StateMachineChannelType = channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 8>;
+#[allow(dead_code)]
+pub enum StateMachineEvents {
+    Shutdown,
+    SleepShutdown,
+    Off,
+    SetHostWatchdogTimeout(u16),
+    HostWatchdogPing,
+}
+
+pub type StateMachineChannelType = channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 16>;
 pub static STATE_MACHINE_EVENT_CHANNEL: StateMachineChannelType = channel::Channel::new();
 
+// Events used by the state machine
+#[derive(Clone, Copy, Debug)]
+pub enum Event {
+    Tick,
+    VinPowerOn,
+    VinPowerOff,
+    VscapReady,
+    CmOn,
+    CmOff,
+    Shutdown,
+    SleepShutdown,
+    Off,
+    SetWatchdogTimeout(u16),
+    WatchdogPing,
+}
+
 /// GPIO outputs that are controlled by the state machine task.
-struct Outputs {
+pub struct Outputs {
     pub ven: Output<'static>,
     pub pcie_sleep: Output<'static>,
     pub dis_usb3: Output<'static>,
@@ -45,533 +86,373 @@ impl Outputs {
             dis_usb3: Output::new(resources.dis_usb3, Level::High),
         }
     }
+
+    fn power_on(&mut self) {
+        self.ven.set_high();
+        self.pcie_sleep.set_low();
+        self.dis_usb0.set_low();
+        self.dis_usb1.set_low();
+        self.dis_usb2.set_low();
+        self.dis_usb3.set_low();
+    }
+
+    fn power_off(&mut self) {
+        self.ven.set_low();
+        self.pcie_sleep.set_high();
+        self.dis_usb0.set_high();
+        self.dis_usb1.set_high();
+        self.dis_usb2.set_high();
+        self.dis_usb3.set_high();
+    }
 }
 
-struct StateMachineContext {
+pub struct Context {
     pub outputs: Outputs,
     pub power_button_channel: &'static PowerButtonChannelType,
     pub led_blinker_channel: &'static LEDBlinkerChannelType,
+    pub host_watchdog_timeout_ms: u16,
+    pub host_watchdog_last_ping: Instant,
 }
 
-impl StateMachineContext {
+impl Context {
     pub fn new(
         outputs: Outputs,
         power_button_channel: &'static PowerButtonChannelType,
         led_blinker_channel: &'static LEDBlinkerChannelType,
+        host_watchdog_timeout_ms: u16,
     ) -> Self {
-        StateMachineContext {
+        Context {
             outputs,
             power_button_channel,
             led_blinker_channel,
+            host_watchdog_timeout_ms,
+            host_watchdog_last_ping: Instant::now(),
         }
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct InitState {}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OffNoVinState {}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OffChargingState {}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BootingState {}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OnState {}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DepletingState {
-    entry_time: Instant,
-}
-
-impl DepletingState {
-    pub fn new() -> Self {
-        DepletingState {
-            entry_time: Instant::now(),
-        }
-    }
-}
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ShutdownState {
-    entry_time: Instant,
-}
-
-impl ShutdownState {
-    pub fn new() -> Self {
-        ShutdownState {
-            entry_time: Instant::now(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OffState {
-    entry_time: Instant,
-}
-impl OffState {
-    pub fn new() -> Self {
-        OffState {
-            entry_time: Instant::now(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WatchdogRebootState {
-    entry_time: Instant,
-}
-impl WatchdogRebootState {
-    pub fn new() -> Self {
-        WatchdogRebootState {
-            entry_time: Instant::now(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SleepShutdownState {}
-impl SleepShutdownState {
-    pub fn new() -> Self {
-        SleepShutdownState {}
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SleepState {}
-impl SleepState {
-    pub fn new() -> Self {
-        SleepState {}
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum StateMachine {
-    Init(InitState),
-    OffNoVin(OffNoVinState),
-    OffCharging(OffChargingState),
-    Booting(BootingState),
-    On(OnState),
-    Depleting(DepletingState),
-    Shutdown(ShutdownState),
-    Off(OffState),
-    WatchdogReboot(WatchdogRebootState),
-    SleepShutdown(SleepShutdownState),
-    Sleep(SleepState),
-}
-
-impl StateMachine {
-    fn new() -> Self {
-        StateMachine::Init(InitState {})
-    }
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        match self {
-            StateMachine::Init(state) => state.enter(context).await,
-            StateMachine::OffNoVin(state) => state.enter(context).await,
-            StateMachine::OffCharging(state) => state.enter(context).await,
-            StateMachine::Booting(state) => state.enter(context).await,
-            StateMachine::On(state) => state.enter(context).await,
-            StateMachine::Depleting(state) => state.enter(context).await,
-            StateMachine::Shutdown(state) => state.enter(context).await,
-            StateMachine::Off(state) => state.enter(context).await,
-            StateMachine::WatchdogReboot(state) => state.enter(context).await,
-            StateMachine::SleepShutdown(state) => state.enter(context).await,
-            StateMachine::Sleep(state) => state.enter(context).await,
-        }
-    }
-    async fn exit(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        match self {
-            StateMachine::Init(state) => state.exit(context).await,
-            StateMachine::OffNoVin(state) => state.exit(context).await,
-            StateMachine::OffCharging(state) => state.exit(context).await,
-            StateMachine::Booting(state) => state.exit(context).await,
-            StateMachine::On(state) => state.exit(context).await,
-            StateMachine::Depleting(state) => state.exit(context).await,
-            StateMachine::Shutdown(state) => state.exit(context).await,
-            StateMachine::Off(state) => state.exit(context).await,
-            StateMachine::WatchdogReboot(state) => state.exit(context).await,
-            StateMachine::SleepShutdown(state) => state.exit(context).await,
-            StateMachine::Sleep(state) => state.exit(context).await,
-        }
-    }
-    async fn run(&mut self, context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        match self {
-            StateMachine::Init(state) => state.run(context).await,
-            StateMachine::OffNoVin(state) => state.run(context).await,
-            StateMachine::OffCharging(state) => state.run(context).await,
-            StateMachine::Booting(state) => state.run(context).await,
-            StateMachine::On(state) => state.run(context).await,
-            StateMachine::Depleting(state) => state.run(context).await,
-            StateMachine::Shutdown(state) => state.run(context).await,
-            StateMachine::Off(state) => state.run(context).await,
-            StateMachine::WatchdogReboot(state) => state.run(context).await,
-            StateMachine::SleepShutdown(state) => state.run(context).await,
-            StateMachine::Sleep(state) => state.run(context).await,
-        }
-    }
-}
-
-#[allow(dead_code)]
-trait State
-where
-    Self: Sized,
-{
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()>;
-    async fn run(&mut self, context: &mut StateMachineContext) -> Result<StateMachine, ()>;
-    async fn exit(&mut self, context: &mut StateMachineContext) -> Result<(), ()>;
-    async fn set_led_pattern(
-        &mut self,
-        context: &StateMachineContext,
-        state: &StateMachine,
-    ) -> Result<(), ()> {
-        context
+    async fn set_led_pattern(&self, state: &HalpiStates) {
+        let _ = self
             .led_blinker_channel
             .send(LEDBlinkerEvents::SetPattern(get_state_pattern(state)))
             .await;
-        Ok(())
+    }
+
+    async fn send_power_button_event(&self, event: PowerButtonEvents) {
+        let _ = self.power_button_channel.send(event).await;
     }
 }
 
-impl State for InitState {
-    async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering InitState");
-        // Initialize state
-        Ok(())
+#[derive(Debug, Default)]
+pub struct HalpiStateMachine {}
+
+#[state_machine(
+    initial = "State::off_no_vin()",
+    before_transition = "Self::before_transition",
+    state(derive(Debug)),
+    superstate(derive(Debug))
+)]
+impl HalpiStateMachine {
+    async fn before_transition(&mut self, source: &State, target: &State) {
+        info!(
+            "Transitioning from {:?} to {:?}",
+            defmt::Debug2Format(source),
+            defmt::Debug2Format(target)
+        );
     }
 
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        // Propagate to next state immediately
-        Ok(StateMachine::OffNoVin(OffNoVinState {}))
-    }
-
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting InitState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for OffNoVinState {
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering OffNoVinState");
-        // Initialize state
-        // Set Ven low
-        context.outputs.ven.set_low();
-        context.outputs.pcie_sleep.set_high();
-        context.outputs.dis_usb0.set_high();
-        context.outputs.dis_usb1.set_high();
-        context.outputs.dis_usb2.set_high();
-        context.outputs.dis_usb3.set_high();
-        // Set the LED blink pattern
-        self.set_led_pattern(context, &StateMachine::OffNoVin(*self))
-            .await?;
-        Ok(())
-    }
-
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
-            // Transition to OffChargingState
-            return Ok(StateMachine::OffCharging(OffChargingState {}));
+    /// Turned off and no voltage on VIN.
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_off_no_vin")]
+    async fn off_no_vin(&mut self, event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::VinPowerOn => Transition(State::off_charging()),
+            _ => Super,
         }
-        Ok(StateMachine::OffNoVin(*self))
     }
 
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting OffNoVinState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for OffChargingState {
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering OffChargingState");
-        // Set the LED blink pattern
-        self.set_led_pattern(context, &StateMachine::OffCharging(*self))
-            .await?;
-        Ok(())
+    #[action]
+    async fn enter_off_no_vin(&mut self, context: &mut Context) {
+        context.outputs.power_off();
     }
 
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        if inputs.vscap > DEFAULT_VSCAP_POWER_ON_THRESHOLD {
-            // Transition to BootingState
-            return Ok(StateMachine::Booting(BootingState {}));
+    /// Turned off, but supercap is charging.
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_off_charging")]
+    async fn off_charging(&mut self, event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::VscapReady => Transition(State::booting()),
+            Event::VinPowerOff => Transition(State::off_no_vin()),
+            _ => Super,
         }
-        if inputs.vin < DEFAULT_VIN_POWER_THRESHOLD {
-            // Transition to OffNoVinState
-            return Ok(StateMachine::OffNoVin(OffNoVinState {}));
+    }
+
+    #[action]
+    async fn enter_off_charging(&mut self, context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::OffCharging).await;
+    }
+
+    /// 5V rail is powered on and we're waiting for the CM5 3.3V rail to come up.
+    #[state(entry_action = "enter_booting")]
+    async fn booting(event: &Event) -> Outcome<State> {
+        match event {
+            Event::CmOn => Transition(State::on_no_watchdog()),
+            Event::VinPowerOff => Transition(State::off_no_vin()),
+            _ => Super,
         }
-        Ok(StateMachine::OffCharging(*self))
     }
 
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting OffChargingState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for BootingState {
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering BootingState");
-        // Enable the 5V output
-        context.outputs.ven.set_high();
-        context.outputs.pcie_sleep.set_low();
-        context.outputs.dis_usb0.set_low();
-        context.outputs.dis_usb1.set_low();
-        context.outputs.dis_usb2.set_low();
-        context.outputs.dis_usb3.set_low();
-        // Set the LED blink pattern
-        self.set_led_pattern(context, &StateMachine::Booting(*self))
-            .await?;
-        Ok(())
+    #[action]
+    async fn enter_booting(context: &mut Context) {
+        context.outputs.power_on();
+        context.set_led_pattern(&HalpiStates::Booting).await;
     }
 
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        if inputs.cm_on {
-            // Transition to OnState
-            return Ok(StateMachine::On(OnState {}));
+    /// Superstate for all situations where the system is powered on and running.
+    #[allow(unused_variables)]
+    #[superstate]
+    async fn on(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::CmOff => {
+                Transition(State::off(Instant::now()))
+            }
+            Event::WatchdogPing => {
+                context.host_watchdog_last_ping = Instant::now();
+                Handled
+            }
+            _ => Super,
         }
-        if inputs.vin < DEFAULT_VIN_POWER_THRESHOLD {
-            // Transition to OffNoVinState
-            return Ok(StateMachine::OffNoVin(OffNoVinState {}));
+    }
+
+    /// Powered on, but no watchdog enabled.
+    #[allow(unused_variables)]
+    #[state(superstate = "on", entry_action = "enter_on_no_watchdog")]
+    async fn on_no_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::SetWatchdogTimeout(timeout) => {
+                context.host_watchdog_timeout_ms = *timeout;
+                if *timeout > 0 {
+                    Transition(State::on_with_watchdog())
+                } else {
+                    Super
+                }
+            }
+            Event::VinPowerOff => Transition(State::depleting_no_watchdog(Instant::now())),
+            _ => Super,
         }
-
-        Ok(StateMachine::Booting(*self))
     }
 
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting BootingState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for OnState {
-    async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering OnState");
-        // Set the LED blink pattern
-        self.set_led_pattern(_context, &StateMachine::On(*self))
-            .await?;
-        Ok(())
+    #[action]
+    async fn enter_on_no_watchdog(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::OnNoWatchdog).await;
+        context.host_watchdog_timeout_ms = 0; // Disable watchdog
     }
 
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        if inputs.vin < DEFAULT_VIN_POWER_THRESHOLD {
-            // Transition to DepletingState
-            return Ok(StateMachine::Depleting(DepletingState::new()));
+    /// Powered on with watchdog enabled.
+    #[allow(unused_variables)]
+    #[state(superstate = "on", entry_action = "enter_on_with_watchdog")]
+    async fn on_with_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::Tick => {
+                // If the host watchdog is enabled, we will send a ping to the watchdog task.
+                if context.host_watchdog_timeout_ms == 0 {
+                    warn!("Host watchdog is disabled, but we are in the on_with_watchdog state.");
+                    // Transition to the no watchdog state if the timeout is 0.
+                    return Transition(State::on_no_watchdog());
+                }
+                if Instant::now().duration_since(context.host_watchdog_last_ping)
+                    > Duration::from_millis(context.host_watchdog_timeout_ms as u64)
+                {
+                    Transition(State::watchdog_alert(Instant::now()))
+                } else {
+                    Super
+                }
+            }
+            Event::SetWatchdogTimeout(timeout) => {
+                context.host_watchdog_timeout_ms = *timeout;
+                if *timeout == 0 {
+                    Transition(State::on_no_watchdog())
+                } else {
+                    Transition(State::on_with_watchdog())
+                }
+            }
+            Event::VinPowerOff => Transition(State::depleting_with_watchdog()),
+            _ => Super,
         }
-        if !inputs.cm_on {
-            // Host has powered off. Let's reset the MCU to allow e.g. flash
-            // partition swaps
-            SCB::sys_reset();
-            //return Ok(StateMachine::OffNoVin(OffNoVinState {}));
+    }
+
+    #[action]
+    async fn enter_on_with_watchdog(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::OnWithWatchdog).await;
+    }
+
+    /// If the host watchdog is not enabled, we will trigger shutdown after a timeout.
+    #[allow(unused_variables)]
+    #[state(superstate = "on", entry_action = "enter_depleting_no_watchdog")]
+    async fn depleting_no_watchdog(
+        entry_time: &mut Instant,
+        event: &Event,
+        context: &mut Context,
+    ) -> Outcome<State> {
+        match event {
+            Event::Tick => {
+                let now = Instant::now();
+                if now.duration_since(*entry_time)
+                    > Duration::from_millis(DEFAULT_DEPLETING_TIMEOUT_MS as u64)
+                {
+                    Transition(State::shutdown(Instant::now()))
+                } else {
+                    Super
+                }
+            }
+            Event::VinPowerOn => Transition(State::on_no_watchdog()),
+            _ => Super,
         }
-        Ok(StateMachine::On(*self))
     }
 
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting OnState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for DepletingState {
-    async fn enter(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering DepletingState");
-        self.entry_time = Instant::now();
-        // Set the LED blink pattern
-        self.set_led_pattern(_context, &StateMachine::Depleting(*self))
-            .await?;
-        Ok(())
-    }
-
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        let now = Instant::now();
-        if now.duration_since(self.entry_time) > Duration::from_secs(5) {
-            // Transition to ShutdownState
-            return Ok(StateMachine::Shutdown(ShutdownState::new()));
-        }
-
-        if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
-            // Transition to OnState
-            return Ok(StateMachine::On(OnState {}));
-        }
-        if !inputs.cm_on {
-            return Ok(StateMachine::OffNoVin(OffNoVinState {}));
-        }
-        Ok(StateMachine::Depleting(*self))
-    }
-
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting DepletingState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for ShutdownState {
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering ShutdownState");
-        // Double-click the power button
+    #[action]
+    async fn enter_depleting_no_watchdog(entry_time: &mut Instant, context: &mut Context) {
+        *entry_time = Instant::now();
         context
-            .power_button_channel
-            .send(PowerButtonEvents::DoubleClick)
+            .set_led_pattern(&HalpiStates::DepletingNoWatchdog)
             .await;
-        // Set the LED blink pattern
-        self.set_led_pattern(context, &StateMachine::Shutdown(*self))
-            .await?;
-        Ok(())
     }
 
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        let now = Instant::now();
-        if !inputs.cm_on
-            || now.duration_since(self.entry_time)
-                > Duration::from_millis(DEFAULT_SHUTDOWN_WAIT_DURATION_MS as u64)
-        {
-            // Transition to OffState
-            return Ok(StateMachine::Off(OffState::new()));
+    /// If the host watchdog is enabled, we will wait for the host to initiate shutdown
+    #[allow(unused_variables)]
+    #[state(superstate = "on", entry_action = "enter_depleting_with_watchdog")]
+    async fn depleting_with_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::Shutdown => Transition(State::shutdown(Instant::now())),
+            Event::VinPowerOn => Transition(State::on_with_watchdog()),
+            _ => Super,
         }
-
-        Ok(StateMachine::Shutdown(*self))
     }
 
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting ShutdownState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for OffState {
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering OffState");
-        context.outputs.ven.set_low();
-        context.outputs.pcie_sleep.set_high();
-        context.outputs.dis_usb0.set_high();
-        context.outputs.dis_usb1.set_high();
-        context.outputs.dis_usb2.set_high();
-        context.outputs.dis_usb3.set_high();
-        // Set the LED blink pattern
-        self.set_led_pattern(context, &StateMachine::Off(*self))
-            .await?;
-        self.entry_time = Instant::now();
-        Ok(())
+    #[action]
+    async fn enter_depleting_with_watchdog(context: &mut Context) {
+        context
+            .set_led_pattern(&HalpiStates::DepletingWithWatchdog)
+            .await;
     }
 
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
-            // Transition to OffChargingState
-            return Ok(StateMachine::OffCharging(OffChargingState {}));
+    /// Shutdown state, where the system is waiting for the shutdown to complete.
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_shutdown")]
+    async fn shutdown(
+        entry_time: &mut Instant,
+        event: &Event,
+        context: &mut Context,
+    ) -> Outcome<State> {
+        match event {
+            Event::Tick => {
+                let shutdown_wait_duration_ms = get_shutdown_wait_duration_ms().await;
+                let now = Instant::now();
+                if now.duration_since(*entry_time)
+                    > Duration::from_millis(shutdown_wait_duration_ms as u64)
+                {
+                    Transition(State::off(Instant::now()))
+                } else {
+                    Super
+                }
+            }
+            Event::CmOff => Transition(State::off(Instant::now())),
+            _ => Super,
         }
+    }
 
-        let now = Instant::now();
-        if now.duration_since(self.entry_time) > Duration::from_secs(5) {
-            // Reset the MCU
-            SCB::sys_reset();
+    #[action]
+    async fn enter_shutdown(context: &mut Context) {
+        context
+            .send_power_button_event(PowerButtonEvents::DoubleClick)
+            .await;
+        context.set_led_pattern(&HalpiStates::Shutdown).await;
+    }
+
+    /// Turned off. Will reboot after 5 seconds if no VIN power is detected.
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_off")]
+    async fn off(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            Event::Tick => {
+                let now = Instant::now();
+                if now.duration_since(*entry_time)
+                    > Duration::from_millis(OFF_STATE_DURATION_MS as u64)
+                {
+                    //SCB::sys_reset();
+                    Transition(State::off_no_vin())
+                } else {
+                    Super
+                }
+            }
+            _ => Super,
         }
-        Ok(StateMachine::Off(*self))
     }
 
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting OffState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for WatchdogRebootState {
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering WatchdogRebootState");
-        self.entry_time = Instant::now();
-        // Set the LED blink pattern
-        self.set_led_pattern(context, &StateMachine::WatchdogReboot(*self))
-            .await?;
-        Ok(())
+    #[action]
+    async fn enter_off(context: &mut Context) {
+        context.outputs.power_off();
+        context.set_led_pattern(&HalpiStates::Off).await;
     }
 
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        // Stay in this state for 5 seconds
-        let now = Instant::now();
-        if now.duration_since(self.entry_time) > Duration::from_secs(5) {
-            // Transition to OffState
-            return Ok(StateMachine::Off(OffState::new()));
+    // This state is triggered if the host watchdog is enabled and a watchdog timeout occurs.
+    #[allow(unused_variables)]
+    #[state(superstate = "on", entry_action = "enter_watchdog_alert")]
+    async fn watchdog_alert(
+        entry_time: &mut Instant,
+        event: &Event,
+        context: &mut Context,
+    ) -> Outcome<State> {
+        match event {
+            Event::Tick => {
+                let now = Instant::now();
+                if now.duration_since(*entry_time)
+                    > Duration::from_secs(HOST_WATCHDOG_REBOOT_DURATION_MS as u64)
+                {
+                    Transition(State::off(Instant::now()))
+                } else {
+                    Super
+                }
+            }
+            Event::VinPowerOn => Transition(State::on_with_watchdog()),
+            _ => Super,
         }
-        // If CM is off, transition to OffState
-        let inputs = INPUTS.lock().await;
-        if !inputs.cm_on {
-            return Ok(StateMachine::Off(OffState::new()));
+    }
+
+    #[action]
+    async fn enter_watchdog_alert(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::WatchdogAlert).await;
+    }
+
+    /// Shutdown to a sleep state, where the system is waiting for the CM to power on.
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_sleep_shutdown")]
+    async fn sleep_shutdown(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            // FIXME: Which events should be handled here?
+            Event::CmOff => Transition(State::sleep()),
+            _ => Super,
         }
-        Ok(StateMachine::WatchdogReboot(*self))
     }
 
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting WatchdogRebootState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for SleepShutdownState {
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering SleepShutdownState");
-        // Set the LED blink pattern
-        self.set_led_pattern(context, &StateMachine::SleepShutdown(*self))
-            .await?;
-        Ok(())
+    #[action]
+    async fn enter_sleep_shutdown(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::SleepShutdown).await;
     }
 
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        // FIXME: SleepShutdown state logic needs to be defined
-        if inputs.cm_on {
-            // Transition to SleepState
-            return Ok(StateMachine::Sleep(SleepState::new()));
+    /// Sleep state. The CM5 is shut down but may wake up on internal events.
+    #[allow(unused_variables)]
+    #[state(entry_action = "enter_sleep")]
+    async fn sleep(event: &Event, context: &mut Context) -> Outcome<State> {
+        match event {
+            // FIXME: Which events should be handled here?
+            Event::CmOn => Transition(State::on_no_watchdog()),
+            _ => Super,
         }
-        Ok(StateMachine::SleepShutdown(*self))
     }
 
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting SleepShutdownState");
-        // Cleanup state
-        Ok(())
-    }
-}
-
-impl State for SleepState {
-    async fn enter(&mut self, context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Entering SleepState");
-        // Set the LED blink pattern
-        self.set_led_pattern(context, &StateMachine::Sleep(*self))
-            .await?;
-        Ok(())
-    }
-
-    async fn run(&mut self, _context: &mut StateMachineContext) -> Result<StateMachine, ()> {
-        let inputs = INPUTS.lock().await;
-        // FIXME: Sleep state logic needs to be defined
-        if inputs.cm_on {
-            // Transition to OffNoVinState
-            return Ok(StateMachine::OffNoVin(OffNoVinState {}));
-        }
-        Ok(StateMachine::Sleep(*self))
-    }
-
-    async fn exit(&mut self, _context: &mut StateMachineContext) -> Result<(), ()> {
-        info!("Exiting SleepState");
-        // Cleanup state
-        Ok(())
+    #[action]
+    async fn enter_sleep(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::Sleep).await;
     }
 }
 
@@ -582,16 +463,16 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
     // Initialize resources
     let outputs = Outputs::new(smor);
 
-    let mut context = StateMachineContext::new(
+    let mut context = Context::new(
         outputs,
         &POWER_BUTTON_EVENT_CHANNEL,
         &LED_BLINKER_EVENT_CHANNEL,
+        0, // Host watchdog is initially disabled
     );
 
-    let mut prev_state = StateMachine::Init(InitState {});
-    let mut state = prev_state;
+    let mut state_machine = HalpiStateMachine::default().state_machine();
 
-    let mut ticker = Ticker::every(Duration::from_millis(500));
+    let mut ticker = Ticker::every(Duration::from_millis(50));
 
     let receiver = STATE_MACHINE_EVENT_CHANNEL.receiver();
 
@@ -601,29 +482,62 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
         // Handle state machine transitions
         ticker.next().await;
 
-        if !receiver.is_empty() {
+        let mut events_to_process = Vec::new();
+
+        while !receiver.is_empty() {
             // Check for events from the channel
             let event = receiver.receive().await;
             match event {
-                StateMachineEvents::SetState(new_state) => {
-                    state.exit(&mut context).await.unwrap();
-                    state.enter(&mut context).await.unwrap();
-                    prev_state = state;
-                    state = new_state;
+                StateMachineEvents::Shutdown => {
+                    events_to_process.push(Event::Shutdown);
+                }
+                StateMachineEvents::SetHostWatchdogTimeout(timeout) => {
+                    // events_to_process.push(Event::SetWatchdogTimeout(timeout));
+                }
+                StateMachineEvents::HostWatchdogPing => {
+                    events_to_process.push(Event::WatchdogPing);
+                }
+                StateMachineEvents::SleepShutdown => {
+                    events_to_process.push(Event::SleepShutdown);
+                }
+                StateMachineEvents::Off => {
+                    events_to_process.push(Event::Off);
                 }
             }
         }
 
-        state = state.run(&mut context).await.unwrap();
+        // Generate events based on current inputs
+        let inputs = INPUTS.lock().await;
 
-        // Check if the state has changed
-        if state != prev_state {
-            // Exit the previous state
-            prev_state.exit(&mut context).await.unwrap();
-            // Enter the new state
-            state.enter(&mut context).await.unwrap();
-            // Update the current state
-            prev_state = state;
+        // Check VIN power
+        if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
+            events_to_process.push(Event::VinPowerOn);
+        } else {
+            events_to_process.push(Event::VinPowerOff);
+        }
+
+        // Check supercap voltage
+        if inputs.vscap > DEFAULT_VSCAP_POWER_ON_THRESHOLD {
+            events_to_process.push(Event::VscapReady);
+        }
+
+        // Check CM state
+        if inputs.cm_on {
+            events_to_process.push(Event::CmOn);
+        } else {
+            events_to_process.push(Event::CmOff);
+        }
+
+        // Add a regular tick event
+        events_to_process.push(Event::Tick);
+
+        drop(inputs);
+
+        for event in events_to_process {
+            // Handle each event
+            state_machine
+                .handle_with_context(&event, &mut context)
+                .await;
         }
     }
 }

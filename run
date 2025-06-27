@@ -94,10 +94,47 @@ function build-debian {
   _env
   # We don't want to include the build artifacts in the Debian package.
   echo "🏗️ Building Debian package..."
+  export DEBEMAIL="info@hatlabs.fi"
+  export DEBFULLNAME="Hat Labs CI"
   export FIRMWARE_VERSION=$(cat firmware/VERSION)
+  DEB_VERSION=$(echo "$FIRMWARE_VERSION" | sed 's/-\([a-zA-Z]\)/~\1/g')
+
 	envsubst < debian/install.in > debian/install
 
-  dpkg-buildpackage -us -uc
+  # Create a new changelog entry
+  dch --newversion "$DEB_VERSION" \
+      --distribution stable \
+      --force-distribution \
+      "Automated release $FIRMWARE_VERSION. See GitHub for details."
+
+  dpkg-buildpackage -us -uc -b
+}
+
+function convert-artifacts {
+  mkdir -p artifacts
+
+  BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
+  FIRMWARE_VERSION=$(cat firmware/VERSION)
+
+  # Copy original ELF files
+  cp target/thumbv6m-none-eabi/release/bootloader artifacts/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
+  cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.elf
+
+  # Convert each ELF to UF2 and BIN
+  for elf in artifacts/*.elf; do
+    if [ -f "$elf" ]; then
+      base=$(basename "$elf" .elf)
+      echo "Converting $base..."
+
+      # Convert to UF2 (for bootsel mode flashing)
+      elf2uf2-rs "$elf" "artifacts/${base}.uf2"
+
+      # Convert to BIN (for some programming tools)
+      cargo objcopy --release -- -O binary artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.bin
+
+      echo "✓ Created ${base}.uf2 and ${base}.bin"
+    fi
+  done
 }
 
 function debtools {
@@ -112,9 +149,15 @@ function build-debtools {
 }
 
 function debtools-build {
-  cargo-clean
   # Build the Debian package using the debtools container.
   debtools ./run build-debian
+}
+
+function build-all {
+  build-bootloader
+  build --release
+  convert-artifacts
+  debtools-build
 }
 
 ################################################################################
@@ -139,9 +182,6 @@ readonly PROJECT_ROOT=$(pwd)
 
 # Store the absolute path to this script (useful for recursion).
 readonly SCRIPT="$PROJECT_ROOT/$(basename "$0")"
-
-# Project source directories.
-SRC="backend frontend"
 
 ################################################################################
 # Meta-commands and utilities follow.
