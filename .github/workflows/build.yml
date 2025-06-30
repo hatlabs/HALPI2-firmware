@@ -166,13 +166,13 @@ jobs:
       run: |
         VERSION=$(cat firmware/VERSION)
         # Delete existing draft if it exists
-        gh release delete $VERSION --yes 2>/dev/null || true
+        gh release delete v$VERSION --yes 2>/dev/null || true
 
         # Create new draft release
         # NOTE: Any prerelease files with tildes will be renamed to dots.
-        gh release create $VERSION \
+        gh release create v$VERSION \
           --draft \
-          --title "HALPI2 Firmware $VERSION" \
+          --title "HALPI2 Firmware v$VERSION" \
           --notes "🔧 **DRAFT - FOR TESTING ONLY**
 
         This is a draft release with freshly built firmware binaries in all formats.
