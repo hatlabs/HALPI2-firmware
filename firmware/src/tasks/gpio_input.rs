@@ -51,6 +51,47 @@ impl Inputs {
 /// Shared inputs protected by a mutex.
 pub static INPUTS: Mutex<CriticalSectionRawMutex, Inputs> = Mutex::new(Inputs::new());
 
+const AVERAGE_SAMPLES: usize = 10;
+
+struct AveragedInput {
+    samples: [f32; AVERAGE_SAMPLES],
+    index: usize,
+    sum: f32,
+    count: usize,
+}
+
+impl AveragedInput {
+    fn new() -> Self {
+        Self {
+            samples: [0.0; AVERAGE_SAMPLES],
+            index: 0,
+            sum: 0.0,
+            count: 0,
+        }
+    }
+
+    fn add_sample(&mut self, value: f32) {
+        if self.count < AVERAGE_SAMPLES {
+            self.samples[self.index] = value;
+            self.sum += value;
+            self.count += 1;
+        } else {
+            self.sum -= self.samples[self.index];
+            self.samples[self.index] = value;
+            self.sum += value;
+        }
+        self.index = (self.index + 1) % AVERAGE_SAMPLES;
+    }
+
+    fn average(&self) -> f32 {
+        if self.count == 0 {
+            0.0
+        } else {
+            self.sum / self.count as f32
+        }
+    }
+}
+
 #[task]
 pub async fn power_button_input_task(
     r: PowerButtonInputResources,
@@ -144,23 +185,48 @@ pub async fn analog_input_task(r: AnalogInputResources) {
 
     info!("Analog input task initialized");
 
+    let mut vin_avg = AveragedInput::new();
+    let mut vscap_avg = AveragedInput::new();
+    let mut iin_avg = AveragedInput::new();
+    let mut mcu_temp_avg = AveragedInput::new();
+
+    let vin_adc_scale = crate::tasks::config_manager::get_vin_correction_scale().await * VIN_ADC_SCALE;
+    let vscap_adc_scale = crate::tasks::config_manager::get_vscap_correction_scale().await * VSCAP_ADC_SCALE;
+    let iin_adc_scale = crate::tasks::config_manager::get_iin_correction_scale().await * IIN_ADC_SCALE;
+
     loop {
         ticker.next().await;
 
         trace!("Reading analog inputs");
 
-        let vin = adc.read(&mut vins).await;
-        let vscap_value = adc.read(&mut vscaps).await;
-        let iin_value = adc.read(&mut iin).await;
-        let mcu_temp_value = adc.read(&mut mcu_temp).await;
+        let vin = adc.read(&mut vins).await.unwrap_or(0);
+        let vscap_value = adc.read(&mut vscaps).await.unwrap_or(0);
+        let iin_value = adc.read(&mut iin).await.unwrap_or(0);
+        let mcu_temp_value = adc.read(&mut mcu_temp).await.unwrap_or(0);
+
+        let vin_sample = (vin as f32) * vin_adc_scale;
+        let vscap_sample = (vscap_value as f32) * vscap_adc_scale;
+        let iin_sample = (iin_value as f32) * iin_adc_scale;
+        let mcu_temp_sample =
+            27.0 - (mcu_temp_value as f32 * 3.3 / 4096.0 - 0.706) / 0.001721 + 273.15;
+
+        vin_avg.add_sample(vin_sample);
+        vscap_avg.add_sample(vscap_sample);
+        iin_avg.add_sample(iin_sample);
+        mcu_temp_avg.add_sample(mcu_temp_sample);
 
         let mut inputs = INPUTS.lock().await;
-        inputs.vin = (vin.unwrap_or(0) as f32) * VIN_ADC_SCALE;
-        inputs.vscap = (vscap_value.unwrap_or(0) as f32) * VSCAP_ADC_SCALE;
-        inputs.iin = (iin_value.unwrap_or(0) as f32) * IIN_ADC_SCALE;
-        // Convert to Kelvin
-        inputs.mcu_temp =
-            27.0 - (mcu_temp_value.unwrap_or(0) as f32 * 3.3 / 4096.0 - 0.706) / 0.001721 + 273.15;
+        inputs.vin = vin_avg.average();
+        inputs.vscap = vscap_avg.average();
+
+        if inputs.vin < inputs.vscap {
+            // If Vin is less than Vscap, Vscap is backfeeding into Vin.
+            // In that case, we set Vin manually to 0.
+            inputs.vin = 0.0;
+        }
+
+        inputs.iin = iin_avg.average();
+        inputs.mcu_temp = mcu_temp_avg.average();
 
         trace!(
             "VIN: {}, VSCAP: {}, IIN: {}",

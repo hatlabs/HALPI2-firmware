@@ -46,7 +46,8 @@ pub enum StateMachineEvents {
     HostWatchdogPing,
 }
 
-pub type StateMachineChannelType = channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 16>;
+pub type StateMachineChannelType =
+    channel::Channel<CriticalSectionRawMutex, StateMachineEvents, 16>;
 pub static STATE_MACHINE_EVENT_CHANNEL: StateMachineChannelType = channel::Channel::new();
 
 // Events used by the state machine
@@ -212,9 +213,7 @@ impl HalpiStateMachine {
     #[superstate]
     async fn on(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
-            Event::CmOff => {
-                Transition(State::off(Instant::now()))
-            }
+            Event::CmOff => Transition(State::off(Instant::now())),
             Event::WatchdogPing => {
                 context.host_watchdog_last_ping = Instant::now();
                 Handled
@@ -236,6 +235,7 @@ impl HalpiStateMachine {
                     Super
                 }
             }
+            Event::SleepShutdown => Transition(State::sleep_shutdown()),
             Event::VinPowerOff => Transition(State::depleting_no_watchdog(Instant::now())),
             _ => Super,
         }
@@ -275,6 +275,7 @@ impl HalpiStateMachine {
                     Transition(State::on_with_watchdog())
                 }
             }
+            Event::SleepShutdown => Transition(State::sleep_shutdown()),
             Event::VinPowerOff => Transition(State::depleting_with_watchdog()),
             _ => Super,
         }
@@ -299,6 +300,9 @@ impl HalpiStateMachine {
                 if now.duration_since(*entry_time)
                     > Duration::from_millis(DEFAULT_DEPLETING_TIMEOUT_MS as u64)
                 {
+                    context
+                        .send_power_button_event(PowerButtonEvents::DoubleClick)
+                        .await;
                     Transition(State::shutdown(Instant::now()))
                 } else {
                     Super
@@ -362,9 +366,6 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_shutdown(context: &mut Context) {
-        context
-            .send_power_button_event(PowerButtonEvents::DoubleClick)
-            .await;
         context.set_led_pattern(&HalpiStates::Shutdown).await;
     }
 
@@ -378,8 +379,7 @@ impl HalpiStateMachine {
                 if now.duration_since(*entry_time)
                     > Duration::from_millis(OFF_STATE_DURATION_MS as u64)
                 {
-                    //SCB::sys_reset();
-                    Transition(State::off_no_vin())
+                    SCB::sys_reset();
                 } else {
                     Super
                 }
@@ -413,7 +413,10 @@ impl HalpiStateMachine {
                     Super
                 }
             }
-            Event::VinPowerOn => Transition(State::on_with_watchdog()),
+            Event::WatchdogPing => {
+                context.host_watchdog_last_ping = Instant::now();
+                Transition(State::on_with_watchdog())
+            }
             _ => Super,
         }
     }
@@ -492,7 +495,7 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
                     events_to_process.push(Event::Shutdown);
                 }
                 StateMachineEvents::SetHostWatchdogTimeout(timeout) => {
-                    // events_to_process.push(Event::SetWatchdogTimeout(timeout));
+                    events_to_process.push(Event::SetWatchdogTimeout(timeout));
                 }
                 StateMachineEvents::HostWatchdogPing => {
                     events_to_process.push(Event::WatchdogPing);

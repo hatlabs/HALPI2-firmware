@@ -56,26 +56,56 @@ The controller implements a state machine to manage the power states of the syst
 diagram is shown below:
 
 ```mermaid
+---
+config:
+  look: handDrawn
+---
 stateDiagram-v2
     [*] --> off_no_vin
 
-    off_no_vin --> off_charging: gpio.vin > 11.0
+    off_no_vin --> off_charging : VinPowerOn
 
-    off_charging --> booting: gpio.vscap > 8.0
-    off_charging --> off: gpio.vin < 9.0
+    off_charging --> booting : VscapReady
+    off_charging --> off_no_vin : VinPowerOff
 
-    booting --> on: gpio.cm_on.value() == 1
-    booting --> off: gpio.vin < 9.0
+    booting --> on_no_watchdog : CmOn
+    booting --> off_no_vin : VinPowerOff
 
-    on --> depleting: gpio.vin < 9.0
-    on --> off: gpio.cm_on.value() == 0
+    on_no_watchdog --> on_with_watchdog : SetWatchdogTimeout(>0)
+    on_with_watchdog --> on_no_watchdog : SetWatchdogTimeout(0)
 
-    depleting --> shutdown: time.ticks_diff > 5000
-    depleting --> on: gpio.vin > 9.0
+    on_no_watchdog --> depleting_no_watchdog : VinPowerOff
+    on_with_watchdog --> depleting_with_watchdog : VinPowerOff
 
-    shutdown --> off: gpio.cm_on.value() == 0
+    on_no_watchdog --> off : CmOff
+    on_with_watchdog --> off : CmOff
 
-    off --> off_no_vin: time.ticks_diff > 1000
+    on_no_watchdog --> sleep_shutdown : SleepShutdown
+    on_with_watchdog --> sleep_shutdown : SleepShutdown
+
+    on_with_watchdog --> watchdog_alert : Tick (timeout)
+
+    depleting_no_watchdog --> shutdown : Tick (timeout)
+    depleting_no_watchdog --> on_no_watchdog : VinPowerOn
+    depleting_no_watchdog --> off : CmOff
+
+    depleting_with_watchdog --> shutdown : Shutdown
+    depleting_with_watchdog --> on_with_watchdog : VinPowerOn
+    depleting_with_watchdog --> off : CmOff
+
+    watchdog_alert --> off : Tick (timeout)
+    watchdog_alert --> on_with_watchdog : WatchdogPing
+    watchdog_alert --> off : CmOff
+
+    shutdown --> off : Tick (timeout)
+    shutdown --> off : CmOff
+
+    off --> [*] : Tick (sys_reset)
+
+    sleep_shutdown --> sleep : CmOff
+    sleep_shutdown --> off : CmOff
+
+    sleep --> on_no_watchdog : CmOn
 ```
 
 ## RGB LEDs
