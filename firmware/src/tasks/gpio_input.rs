@@ -218,6 +218,13 @@ pub async fn analog_input_task(r: AnalogInputResources) {
         let mut inputs = INPUTS.lock().await;
         inputs.vin = vin_avg.average();
         inputs.vscap = vscap_avg.average();
+
+        if inputs.vin < inputs.vscap {
+            // If Vin is less than Vscap, Vscap is backfeeding into Vin.
+            // In that case, we set Vin manually to 0.
+            inputs.vin = 0.0;
+        }
+
         inputs.iin = iin_avg.average();
         inputs.mcu_temp = mcu_temp_avg.average();
 
