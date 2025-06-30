@@ -90,6 +90,16 @@ function flash-all {
   upload
 }
 
+function copy-to-tester {
+  # Copy the firmware binary to the tester directory.
+  build-bootloader
+  build --release
+  VERSION=$(get-version)
+  BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
+  cp target/thumbv6m-none-eabi/release/bootloader ../HALPI2-tests/tests/200_controller/files/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
+  cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware ../HALPI2-tests/tests/200_controller/files/halpi2-rs-firmware_${VERSION}.elf
+}
+
 function build-debian {
   _env
   # We don't want to include the build artifacts in the Debian package.
