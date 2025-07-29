@@ -481,6 +481,10 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
 
     info!("State machine task initialized");
 
+    let mut prev_vin_power = false;
+    let mut prev_vscap_ready = false;
+    let mut prev_cm_on = false;
+
     loop {
         // Handle state machine transitions
         ticker.next().await;
@@ -509,26 +513,38 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
             }
         }
 
-        // Generate events based on current inputs
+        // Generate events based on current inputs (edge detection)
         let inputs = INPUTS.lock().await;
 
-        // Check VIN power
-        if inputs.vin > DEFAULT_VIN_POWER_THRESHOLD {
-            events_to_process.push(Event::VinPowerOn);
-        } else {
-            events_to_process.push(Event::VinPowerOff);
+        // VIN power edge detection
+        let vin_power = inputs.vin > DEFAULT_VIN_POWER_THRESHOLD;
+        if vin_power != prev_vin_power {
+            if vin_power {
+                events_to_process.push(Event::VinPowerOn);
+            } else {
+                events_to_process.push(Event::VinPowerOff);
+            }
+            prev_vin_power = vin_power;
         }
 
-        // Check supercap voltage
-        if inputs.vscap > DEFAULT_VSCAP_POWER_ON_THRESHOLD {
-            events_to_process.push(Event::VscapReady);
+        // Supercap voltage edge detection
+        let vscap_ready = inputs.vscap > DEFAULT_VSCAP_POWER_ON_THRESHOLD;
+        if vscap_ready != prev_vscap_ready {
+            if vscap_ready {
+                events_to_process.push(Event::VscapReady);
+            }
+            prev_vscap_ready = vscap_ready;
         }
 
-        // Check CM state
-        if inputs.cm_on {
-            events_to_process.push(Event::CmOn);
-        } else {
-            events_to_process.push(Event::CmOff);
+        // CM state edge detection
+        let cm_on = inputs.cm_on;
+        if cm_on != prev_cm_on {
+            if cm_on {
+                events_to_process.push(Event::CmOn);
+            } else {
+                events_to_process.push(Event::CmOff);
+            }
+            prev_cm_on = cm_on;
         }
 
         // Add a regular tick event
