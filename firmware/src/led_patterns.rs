@@ -33,6 +33,6 @@ pub fn get_state_pattern(state: &HalpiStates) -> LEDPattern {
         HalpiStates::Off => LEDPattern::new(vec![Box::new(OneColor::new(100, BLACK))]),
         HalpiStates::WatchdogAlert => LEDPattern::new(vec![Box::new(OneColor::new(100, RED))]),
         HalpiStates::SleepShutdown => LEDPattern::new(vec![Box::new(OneColor::new(100, BLUE))]),
-        HalpiStates::Sleep => LEDPattern::new(vec![Box::new(OneColor::new(100, DARK_GRAY))]),
+        HalpiStates::Sleep => LEDPattern::new(vec![Box::new(OneColor::new(100, DARK_RED))]),
     }
 }
