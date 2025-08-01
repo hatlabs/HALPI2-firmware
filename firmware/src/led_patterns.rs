@@ -32,7 +32,7 @@ pub fn get_state_pattern(state: &HalpiStates) -> LEDPattern {
         HalpiStates::Shutdown => LEDPattern::new(vec![Box::new(SupercapBar::new(100, PURPLE))]),
         HalpiStates::Off => LEDPattern::new(vec![Box::new(OneColor::new(100, BLACK))]),
         HalpiStates::WatchdogAlert => LEDPattern::new(vec![Box::new(OneColor::new(100, RED))]),
-        HalpiStates::SleepShutdown => LEDPattern::new(vec![Box::new(OneColor::new(100, BLUE))]),
-        HalpiStates::Sleep => LEDPattern::new(vec![Box::new(OneColor::new(100, DARK_RED))]),
+        HalpiStates::StandbyShutdown => LEDPattern::new(vec![Box::new(OneColor::new(100, BLUE))]),
+        HalpiStates::Standby => LEDPattern::new(vec![Box::new(OneColor::new(100, DARK_RED))]),
     }
 }

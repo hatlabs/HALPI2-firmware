@@ -239,11 +239,11 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             .send(StateMachineEvents::Off)
                             .await;
                     }
-                    // Initiate sleep shutdown
+                    // Initiate standby shutdown
                     0x31 => {
-                        info!("Initiating sleep shutdown");
+                        info!("Initiating standby shutdown");
                         STATE_MACHINE_EVENT_CHANNEL
-                            .send(StateMachineEvents::SleepShutdown)
+                            .send(StateMachineEvents::StandbyShutdown)
                             .await;
                     }
                     // Start DFU process

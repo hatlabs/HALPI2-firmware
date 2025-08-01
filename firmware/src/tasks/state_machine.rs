@@ -33,14 +33,14 @@ pub enum HalpiStates {
     Shutdown,
     Off,
     WatchdogAlert,
-    SleepShutdown,
-    Sleep,
+    StandbyShutdown,
+    Standby,
 }
 
 #[allow(dead_code)]
 pub enum StateMachineEvents {
     Shutdown,
-    SleepShutdown,
+    StandbyShutdown,
     Off,
     SetHostWatchdogTimeout(u16),
     HostWatchdogPing,
@@ -60,7 +60,7 @@ pub enum Event {
     CmOn,
     CmOff,
     Shutdown,
-    SleepShutdown,
+    StandbyShutdown,
     Off,
     SetWatchdogTimeout(u16),
     WatchdogPing,
@@ -235,7 +235,7 @@ impl HalpiStateMachine {
                     Super
                 }
             }
-            Event::SleepShutdown => Transition(State::sleep_shutdown()),
+            Event::StandbyShutdown => Transition(State::standby_shutdown()),
             Event::VinPowerOff => Transition(State::depleting_no_watchdog(Instant::now())),
             _ => Super,
         }
@@ -275,7 +275,7 @@ impl HalpiStateMachine {
                     Transition(State::on_with_watchdog())
                 }
             }
-            Event::SleepShutdown => Transition(State::sleep_shutdown()),
+            Event::StandbyShutdown => Transition(State::standby_shutdown()),
             Event::VinPowerOff => Transition(State::depleting_with_watchdog()),
             _ => Super,
         }
@@ -426,26 +426,26 @@ impl HalpiStateMachine {
         context.set_led_pattern(&HalpiStates::WatchdogAlert).await;
     }
 
-    /// Shutdown to a sleep state, where the system is waiting for the CM to power on.
+    /// Shutdown to a standby state, where the system is waiting for the CM to power on.
     #[allow(unused_variables)]
-    #[state(entry_action = "enter_sleep_shutdown")]
-    async fn sleep_shutdown(event: &Event, context: &mut Context) -> Outcome<State> {
+    #[state(entry_action = "enter_standby_shutdown")]
+    async fn standby_shutdown(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             // FIXME: Which events should be handled here?
-            Event::CmOff => Transition(State::sleep()),
+            Event::CmOff => Transition(State::standby()),
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_sleep_shutdown(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::SleepShutdown).await;
+    async fn enter_standby_shutdown(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::StandbyShutdown).await;
     }
 
-    /// Sleep state. The CM5 is shut down but may wake up on internal events.
+    /// Standby state. The CM5 is shut down but may wake up on internal events.
     #[allow(unused_variables)]
-    #[state(entry_action = "enter_sleep")]
-    async fn sleep(event: &Event, context: &mut Context) -> Outcome<State> {
+    #[state(entry_action = "enter_standby")]
+    async fn standby(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             // FIXME: Which events should be handled here?
             Event::CmOn => Transition(State::on_no_watchdog()),
@@ -454,8 +454,8 @@ impl HalpiStateMachine {
     }
 
     #[action]
-    async fn enter_sleep(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::Sleep).await;
+    async fn enter_standby(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::Standby).await;
     }
 }
 
@@ -504,8 +504,8 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
                 StateMachineEvents::HostWatchdogPing => {
                     events_to_process.push(Event::WatchdogPing);
                 }
-                StateMachineEvents::SleepShutdown => {
-                    events_to_process.push(Event::SleepShutdown);
+                StateMachineEvents::StandbyShutdown => {
+                    events_to_process.push(Event::StandbyShutdown);
                 }
                 StateMachineEvents::Off => {
                     events_to_process.push(Event::Off);
