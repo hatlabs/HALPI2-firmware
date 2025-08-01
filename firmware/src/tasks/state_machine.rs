@@ -26,10 +26,10 @@ pub enum HalpiStates {
     OffNoVin,
     OffCharging,
     Booting,
-    OnNoWatchdog,
-    OnWithWatchdog,
-    DepletingNoWatchdog,
-    DepletingWithWatchdog,
+    OnSolo,
+    OnCoOp,
+    DepletingSolo,
+    DepletingCoOp,
     Shutdown,
     Off,
     WatchdogAlert,
@@ -196,7 +196,7 @@ impl HalpiStateMachine {
     #[state(entry_action = "enter_booting")]
     async fn booting(event: &Event) -> Outcome<State> {
         match event {
-            Event::CmOn => Transition(State::on_no_watchdog()),
+            Event::CmOn => Transition(State::on_solo()),
             Event::VinPowerOff => Transition(State::off_no_vin()),
             _ => Super,
         }
@@ -224,40 +224,40 @@ impl HalpiStateMachine {
 
     /// Powered on, but no watchdog enabled.
     #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_on_no_watchdog")]
-    async fn on_no_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+    #[state(superstate = "on", entry_action = "enter_on_solo")]
+    async fn on_solo(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::SetWatchdogTimeout(timeout) => {
                 context.host_watchdog_timeout_ms = *timeout;
                 if *timeout > 0 {
-                    Transition(State::on_with_watchdog())
+                    Transition(State::on_co_op())
                 } else {
                     Super
                 }
             }
             Event::StandbyShutdown => Transition(State::standby_shutdown()),
-            Event::VinPowerOff => Transition(State::depleting_no_watchdog(Instant::now())),
+            Event::VinPowerOff => Transition(State::depleting_solo(Instant::now())),
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_on_no_watchdog(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::OnNoWatchdog).await;
+    async fn enter_on_solo(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::OnSolo).await;
         context.host_watchdog_timeout_ms = 0; // Disable watchdog
     }
 
     /// Powered on with watchdog enabled.
     #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_on_with_watchdog")]
-    async fn on_with_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+    #[state(superstate = "on", entry_action = "enter_on_co_op")]
+    async fn on_co_op(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::Tick => {
                 // If the host watchdog is enabled, we will send a ping to the watchdog task.
                 if context.host_watchdog_timeout_ms == 0 {
                     warn!("Host watchdog is disabled, but we are in the on_with_watchdog state.");
                     // Transition to the no watchdog state if the timeout is 0.
-                    return Transition(State::on_no_watchdog());
+                    return Transition(State::on_solo());
                 }
                 if Instant::now().duration_since(context.host_watchdog_last_ping)
                     > Duration::from_millis(context.host_watchdog_timeout_ms as u64)
@@ -270,26 +270,26 @@ impl HalpiStateMachine {
             Event::SetWatchdogTimeout(timeout) => {
                 context.host_watchdog_timeout_ms = *timeout;
                 if *timeout == 0 {
-                    Transition(State::on_no_watchdog())
+                    Transition(State::on_solo())
                 } else {
-                    Transition(State::on_with_watchdog())
+                    Transition(State::on_co_op())
                 }
             }
             Event::StandbyShutdown => Transition(State::standby_shutdown()),
-            Event::VinPowerOff => Transition(State::depleting_with_watchdog()),
+            Event::VinPowerOff => Transition(State::depleting_co_op()),
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_on_with_watchdog(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::OnWithWatchdog).await;
+    async fn enter_on_co_op(context: &mut Context) {
+        context.set_led_pattern(&HalpiStates::OnCoOp).await;
     }
 
     /// If the host watchdog is not enabled, we will trigger shutdown after a timeout.
     #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_depleting_no_watchdog")]
-    async fn depleting_no_watchdog(
+    #[state(superstate = "on", entry_action = "enter_depleting_solo")]
+    async fn depleting_solo(
         entry_time: &mut Instant,
         event: &Event,
         context: &mut Context,
@@ -308,34 +308,34 @@ impl HalpiStateMachine {
                     Super
                 }
             }
-            Event::VinPowerOn => Transition(State::on_no_watchdog()),
+            Event::VinPowerOn => Transition(State::on_solo()),
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_depleting_no_watchdog(entry_time: &mut Instant, context: &mut Context) {
+    async fn enter_depleting_solo(entry_time: &mut Instant, context: &mut Context) {
         *entry_time = Instant::now();
         context
-            .set_led_pattern(&HalpiStates::DepletingNoWatchdog)
+            .set_led_pattern(&HalpiStates::DepletingSolo)
             .await;
     }
 
     /// If the host watchdog is enabled, we will wait for the host to initiate shutdown
     #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_depleting_with_watchdog")]
-    async fn depleting_with_watchdog(event: &Event, context: &mut Context) -> Outcome<State> {
+    #[state(superstate = "on", entry_action = "enter_depleting_co_op")]
+    async fn depleting_co_op(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::Shutdown => Transition(State::shutdown(Instant::now())),
-            Event::VinPowerOn => Transition(State::on_with_watchdog()),
+            Event::VinPowerOn => Transition(State::on_co_op()),
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_depleting_with_watchdog(context: &mut Context) {
+    async fn enter_depleting_co_op(context: &mut Context) {
         context
-            .set_led_pattern(&HalpiStates::DepletingWithWatchdog)
+            .set_led_pattern(&HalpiStates::DepletingCoOp)
             .await;
     }
 
@@ -415,7 +415,7 @@ impl HalpiStateMachine {
             }
             Event::WatchdogPing => {
                 context.host_watchdog_last_ping = Instant::now();
-                Transition(State::on_with_watchdog())
+                Transition(State::on_co_op())
             }
             _ => Super,
         }
@@ -448,7 +448,7 @@ impl HalpiStateMachine {
     async fn standby(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             // FIXME: Which events should be handled here?
-            Event::CmOn => Transition(State::on_no_watchdog()),
+            Event::CmOn => Transition(State::on_solo()),
             _ => Super,
         }
     }
