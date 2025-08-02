@@ -3,7 +3,6 @@ use embassy_executor::task;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::once_lock::OnceLock;
 use sequential_storage::cache::NoCache;
 use sequential_storage::map::{SerializationError, fetch_item, remove_item, store_item};
 use serde::{Deserialize, Serialize};

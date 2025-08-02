@@ -16,7 +16,7 @@ use crate::tasks::flash_writer::{
 };
 use crate::tasks::gpio_input::INPUTS;
 use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
-use crate::tasks::state_machine::{HalpiStates, STATE_MACHINE_EVENT_CHANNEL, StateMachineEvents};
+use crate::tasks::state_machine::{STATE_MACHINE_EVENT_CHANNEL, StateMachineEvents};
 use crc::{CRC_32_ISO_HDLC, Crc};
 use defmt::{debug, error, info};
 use embassy_executor::task;

@@ -8,8 +8,10 @@ use cortex_m::peripheral::SCB;
 use defmt::*;
 use embassy_executor::task;
 use embassy_rp::gpio::{Level, Output};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel;
+use embassy_sync::mutex::Mutex;
+use embassy_sync::once_lock::OnceLock;
 use embassy_time::{Duration, Instant, Ticker};
 use statig::prelude::*;
 
@@ -20,22 +22,6 @@ use crate::tasks::gpio_input::INPUTS;
 use super::led_blinker::LEDBlinkerChannelType;
 use super::power_button::PowerButtonChannelType;
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum HalpiStates {
-    OffNoVin,
-    OffCharging,
-    Booting,
-    OnSolo,
-    OnCoOp,
-    DepletingSolo,
-    DepletingCoOp,
-    Shutdown,
-    Off,
-    WatchdogAlert,
-    StandbyShutdown,
-    Standby,
-}
 
 #[allow(dead_code)]
 pub enum StateMachineEvents {
@@ -131,7 +117,7 @@ impl Context {
         }
     }
 
-    async fn set_led_pattern(&self, state: &HalpiStates) {
+    async fn set_led_pattern(&self, state: &State) {
         let _ = self
             .led_blinker_channel
             .send(LEDBlinkerEvents::SetPattern(get_state_pattern(state)))
@@ -143,14 +129,24 @@ impl Context {
     }
 }
 
+static STATE_MACHINE_STATE: OnceLock<Mutex<NoopRawMutex, State>> = OnceLock::new();
+
+pub async fn get_state_machine_state() -> State {
+    *STATE_MACHINE_STATE.get().await.lock().await
+}
+
+pub async fn record_state_machine_state(state: &State) {
+    *STATE_MACHINE_STATE.get().await.lock().await = *state;
+}
+
 #[derive(Debug, Default)]
 pub struct HalpiStateMachine {}
 
 #[state_machine(
     initial = "State::off_no_vin()",
     before_transition = "Self::before_transition",
-    state(derive(Debug)),
-    superstate(derive(Debug))
+    state(derive(Copy, Clone, Debug)),
+    superstate(derive(Copy, Clone, Debug))
 )]
 impl HalpiStateMachine {
     async fn before_transition(&mut self, source: &State, target: &State) {
@@ -189,7 +185,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_off_charging(&mut self, context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::OffCharging).await;
+        context.set_led_pattern(&State::off_charging()).await;
     }
 
     /// 5V rail is powered on and we're waiting for the CM5 3.3V rail to come up.
@@ -205,7 +201,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_booting(context: &mut Context) {
         context.outputs.power_on();
-        context.set_led_pattern(&HalpiStates::Booting).await;
+        context.set_led_pattern(&State::booting()).await;
     }
 
     /// Superstate for all situations where the system is powered on and running.
@@ -243,7 +239,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_on_solo(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::OnSolo).await;
+        context.set_led_pattern(&State::on_solo()).await;
         context.host_watchdog_timeout_ms = 0; // Disable watchdog
     }
 
@@ -283,7 +279,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_on_co_op(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::OnCoOp).await;
+        context.set_led_pattern(&State::on_co_op()).await;
     }
 
     /// If the host watchdog is not enabled, we will trigger shutdown after a timeout.
@@ -316,9 +312,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_depleting_solo(entry_time: &mut Instant, context: &mut Context) {
         *entry_time = Instant::now();
-        context
-            .set_led_pattern(&HalpiStates::DepletingSolo)
-            .await;
+        context.set_led_pattern(&State::depleting_solo(Instant::now())).await;
     }
 
     /// If the host watchdog is enabled, we will wait for the host to initiate shutdown
@@ -334,9 +328,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_depleting_co_op(context: &mut Context) {
-        context
-            .set_led_pattern(&HalpiStates::DepletingCoOp)
-            .await;
+        context.set_led_pattern(&State::depleting_co_op()).await;
     }
 
     /// Shutdown state, where the system is waiting for the shutdown to complete.
@@ -366,7 +358,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_shutdown(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::Shutdown).await;
+        context.set_led_pattern(&State::shutdown(Instant::now())).await;
     }
 
     /// Turned off. Will reboot after 5 seconds if no VIN power is detected.
@@ -391,7 +383,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_off(context: &mut Context) {
         context.outputs.power_off();
-        context.set_led_pattern(&HalpiStates::Off).await;
+        context.set_led_pattern(&State::off(Instant::now())).await;
     }
 
     // This state is triggered if the host watchdog is enabled and a watchdog timeout occurs.
@@ -423,7 +415,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_watchdog_alert(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::WatchdogAlert).await;
+        context.set_led_pattern(&State::watchdog_alert(Instant::now())).await;
     }
 
     /// Shutdown to a standby state, where the system is waiting for the CM to power on.
@@ -439,7 +431,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_standby_shutdown(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::StandbyShutdown).await;
+        context.set_led_pattern(&State::standby_shutdown()).await;
     }
 
     /// Standby state. The CM5 is shut down but may wake up on internal events.
@@ -455,7 +447,7 @@ impl HalpiStateMachine {
 
     #[action]
     async fn enter_standby(context: &mut Context) {
-        context.set_led_pattern(&HalpiStates::Standby).await;
+        context.set_led_pattern(&State::standby()).await;
     }
 }
 
@@ -474,6 +466,11 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
     );
 
     let mut state_machine = HalpiStateMachine::default().state_machine();
+
+    match STATE_MACHINE_STATE.init(Mutex::<NoopRawMutex, _>::new(*state_machine.state())) {
+        Ok(_) => info!("State machine initialized successfully"),
+        Err(_) => error!("Failed to initialize state machine"),
+    }
 
     let mut ticker = Ticker::every(Duration::from_millis(50));
 
@@ -557,6 +554,8 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
             state_machine
                 .handle_with_context(&event, &mut context)
                 .await;
+            // Record the current state
+            record_state_machine_state(state_machine.state()).await;
         }
     }
 }
