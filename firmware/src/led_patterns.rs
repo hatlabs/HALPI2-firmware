@@ -25,12 +25,12 @@ pub fn get_state_pattern(state: &State) -> LEDPattern {
             Box::new(OneColor::new(1000, WHITE)),
             Box::new(Off::new(1000)),
         ]),
-        State::OnSolo {} => LEDPattern::new(vec![Box::new(SupercapBar::new(100, YELLOW))]),
-        State::OnCoOp {} => LEDPattern::new(vec![Box::new(SupercapBar::new(100, GREEN))]),
-        State::DepletingSolo { .. } => {
+        State::On { co_op_enabled: false } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, YELLOW))]),
+        State::On { co_op_enabled: true } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, GREEN))]),
+        State::Depleting { co_op_enabled: false, .. } => {
             LEDPattern::new(vec![Box::new(SupercapBar::new(100, ORANGE))])
         }
-        State::DepletingCoOp {} => {
+        State::Depleting { co_op_enabled: true, .. } => {
             LEDPattern::new(vec![Box::new(SupercapBar::new(100, DARK_OLIVE_GREEN))])
         }
         State::Shutdown { .. } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, PURPLE))]),

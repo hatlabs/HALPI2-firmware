@@ -140,10 +140,10 @@ pub fn state_as_u8(state: &State) -> u8 {
         State::OffNoVin {} => 0,
         State::OffCharging {} => 1,
         State::Booting {} => 2,
-        State::OnSolo {} => 3,
-        State::OnCoOp {} => 4,
-        State::DepletingSolo { .. } => 5,
-        State::DepletingCoOp {} => 6,
+        State::On { co_op_enabled: false, .. } => 3, // Solo
+        State::On { co_op_enabled: true, .. } => 4,  // CoOp
+        State::Depleting { co_op_enabled: false, .. } => 5, // Solo
+        State::Depleting { co_op_enabled: true, .. } => 6,  // CoOp
         State::Shutdown { .. } => 7,
         State::Off { .. } => 8,
         State::WatchdogAlert { .. } => 9,
@@ -209,7 +209,7 @@ impl HalpiStateMachine {
     #[state(entry_action = "enter_booting")]
     async fn booting(event: &Event) -> Outcome<State> {
         match event {
-            Event::CmOn => Transition(State::on_solo()),
+            Event::CmOn => Transition(State::on(false)), // Start in solo mode
             Event::VinPowerOff => Transition(State::off_no_vin()),
             _ => Super,
         }
@@ -224,7 +224,7 @@ impl HalpiStateMachine {
     /// Superstate for all situations where the system is powered on and running.
     #[allow(unused_variables)]
     #[superstate]
-    async fn on(event: &Event, context: &mut Context) -> Outcome<State> {
+    async fn powered_on(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::CmOff => Transition(State::off(Instant::now())),
             Event::WatchdogPing => {
@@ -235,117 +235,94 @@ impl HalpiStateMachine {
         }
     }
 
-    /// Powered on, but no watchdog enabled.
+    /// Powered on, with optional watchdog cooperation.
     #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_on_solo")]
-    async fn on_solo(event: &Event, context: &mut Context) -> Outcome<State> {
-        match event {
-            Event::SetWatchdogTimeout(timeout) => {
-                context.host_watchdog_timeout_ms = *timeout;
-                if *timeout > 0 {
-                    Transition(State::on_co_op())
-                } else {
-                    Super
-                }
-            }
-            Event::StandbyShutdown => Transition(State::standby_shutdown()),
-            Event::VinPowerOff => Transition(State::depleting_solo(Instant::now())),
-            _ => Super,
-        }
-    }
-
-    #[action]
-    async fn enter_on_solo(context: &mut Context) {
-        context.set_led_pattern(&State::on_solo()).await;
-        context.host_watchdog_timeout_ms = 0; // Disable watchdog
-    }
-
-    /// Powered on with watchdog enabled.
-    #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_on_co_op")]
-    async fn on_co_op(event: &Event, context: &mut Context) -> Outcome<State> {
+    #[state(superstate = "powered_on", entry_action = "enter_on")]
+    async fn on(co_op_enabled: &mut bool, event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::Tick => {
-                // If the host watchdog is enabled, we will send a ping to the watchdog task.
-                if context.host_watchdog_timeout_ms == 0 {
-                    warn!("Host watchdog is disabled, but we are in the on_with_watchdog state.");
-                    // Transition to the no watchdog state if the timeout is 0.
-                    return Transition(State::on_solo());
+                if *co_op_enabled {
+                    // If the host watchdog is enabled, check for timeout
+                    if context.host_watchdog_timeout_ms == 0 {
+                        warn!("Host watchdog is disabled, but we are in co-op mode.");
+                        *co_op_enabled = false;
+                        return Super;
+                    }
+                    if Instant::now().duration_since(context.host_watchdog_last_ping)
+                        > Duration::from_millis(context.host_watchdog_timeout_ms as u64)
+                    {
+                        return Transition(State::watchdog_alert(Instant::now()));
+                    }
                 }
-                if Instant::now().duration_since(context.host_watchdog_last_ping)
-                    > Duration::from_millis(context.host_watchdog_timeout_ms as u64)
-                {
-                    Transition(State::watchdog_alert(Instant::now()))
-                } else {
-                    Super
-                }
+                Super
             }
             Event::SetWatchdogTimeout(timeout) => {
                 context.host_watchdog_timeout_ms = *timeout;
-                if *timeout == 0 {
-                    Transition(State::on_solo())
-                } else {
-                    Transition(State::on_co_op())
-                }
+                *co_op_enabled = *timeout > 0;
+                Super
             }
             Event::StandbyShutdown => Transition(State::standby_shutdown()),
-            Event::VinPowerOff => Transition(State::depleting_co_op()),
+            Event::VinPowerOff => {
+                Transition(State::depleting(*co_op_enabled, Instant::now()))
+            }
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_on_co_op(context: &mut Context) {
-        context.set_led_pattern(&State::on_co_op()).await;
+    async fn enter_on(co_op_enabled: &mut bool, context: &mut Context) {
+        if *co_op_enabled {
+            context.set_led_pattern(&State::on(true)).await;
+        } else {
+            context.set_led_pattern(&State::on(false)).await;
+            context.host_watchdog_timeout_ms = 0; // Disable watchdog
+        }
     }
 
-    /// If the host watchdog is not enabled, we will trigger shutdown after a timeout.
+    /// Power is depleting, behavior depends on watchdog cooperation mode.
     #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_depleting_solo")]
-    async fn depleting_solo(
+    #[state(superstate = "powered_on", entry_action = "enter_depleting")]
+    async fn depleting(
+        co_op_enabled: &mut bool,
         entry_time: &mut Instant,
         event: &Event,
         context: &mut Context,
     ) -> Outcome<State> {
         match event {
             Event::Tick => {
-                let now = Instant::now();
-                if now.duration_since(*entry_time)
-                    > Duration::from_millis(DEFAULT_DEPLETING_TIMEOUT_MS as u64)
-                {
-                    context
-                        .send_power_button_event(PowerButtonEvents::DoubleClick)
-                        .await;
+                if !*co_op_enabled {
+                    // Solo mode: trigger shutdown after timeout
+                    let now = Instant::now();
+                    if now.duration_since(*entry_time)
+                        > Duration::from_millis(DEFAULT_DEPLETING_TIMEOUT_MS as u64)
+                    {
+                        context
+                            .send_power_button_event(PowerButtonEvents::DoubleClick)
+                            .await;
+                        return Transition(State::shutdown(Instant::now()));
+                    }
+                }
+                // CoOp mode: wait for host to initiate shutdown
+                Super
+            }
+            Event::Shutdown => {
+                if *co_op_enabled {
                     Transition(State::shutdown(Instant::now()))
                 } else {
                     Super
                 }
             }
-            Event::VinPowerOn => Transition(State::on_solo()),
+            Event::VinPowerOn => {
+                Transition(State::on(*co_op_enabled))
+            }
             _ => Super,
         }
     }
 
     #[action]
-    async fn enter_depleting_solo(entry_time: &mut Instant, context: &mut Context) {
+    async fn enter_depleting(co_op_enabled: &mut bool, entry_time: &mut Instant, context: &mut Context) {
         *entry_time = Instant::now();
-        context.set_led_pattern(&State::depleting_solo(Instant::now())).await;
-    }
-
-    /// If the host watchdog is enabled, we will wait for the host to initiate shutdown
-    #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_depleting_co_op")]
-    async fn depleting_co_op(event: &Event, context: &mut Context) -> Outcome<State> {
-        match event {
-            Event::Shutdown => Transition(State::shutdown(Instant::now())),
-            Event::VinPowerOn => Transition(State::on_co_op()),
-            _ => Super,
-        }
-    }
-
-    #[action]
-    async fn enter_depleting_co_op(context: &mut Context) {
-        context.set_led_pattern(&State::depleting_co_op()).await;
+        context.set_led_pattern(&State::depleting(*co_op_enabled, Instant::now())).await;
     }
 
     /// Shutdown state, where the system is waiting for the shutdown to complete.
@@ -405,7 +382,7 @@ impl HalpiStateMachine {
 
     // This state is triggered if the host watchdog is enabled and a watchdog timeout occurs.
     #[allow(unused_variables)]
-    #[state(superstate = "on", entry_action = "enter_watchdog_alert")]
+    #[state(superstate = "powered_on", entry_action = "enter_watchdog_alert")]
     async fn watchdog_alert(
         entry_time: &mut Instant,
         event: &Event,
@@ -424,7 +401,7 @@ impl HalpiStateMachine {
             }
             Event::WatchdogPing => {
                 context.host_watchdog_last_ping = Instant::now();
-                Transition(State::on_co_op())
+                Transition(State::on(true)) // Return to co-op mode
             }
             _ => Super,
         }
@@ -457,7 +434,7 @@ impl HalpiStateMachine {
     async fn standby(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             // FIXME: Which events should be handled here?
-            Event::CmOn => Transition(State::on_solo()),
+            Event::CmOn => Transition(State::on(false)), // Start in solo mode
             _ => Super,
         }
     }
