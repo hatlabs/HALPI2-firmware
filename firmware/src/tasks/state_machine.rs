@@ -227,6 +227,7 @@ impl HalpiStateMachine {
     async fn powered_on(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
             Event::CmOff => Transition(State::off(Instant::now())),
+            Event::Off => Transition(State::off(Instant::now())), // Force immediate shutdown
             Event::WatchdogPing => {
                 context.host_watchdog_last_ping = Instant::now();
                 Handled
