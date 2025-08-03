@@ -135,6 +135,23 @@ pub async fn get_state_machine_state() -> State {
     *STATE_MACHINE_STATE.get().await.lock().await
 }
 
+pub fn state_as_u8(state: &State) -> u8 {
+    match state {
+        State::OffNoVin {} => 0,
+        State::OffCharging {} => 1,
+        State::Booting {} => 2,
+        State::OnSolo {} => 3,
+        State::OnCoOp {} => 4,
+        State::DepletingSolo { .. } => 5,
+        State::DepletingCoOp {} => 6,
+        State::Shutdown { .. } => 7,
+        State::Off { .. } => 8,
+        State::WatchdogAlert { .. } => 9,
+        State::StandbyShutdown {} => 10,
+        State::Standby {} => 11,
+    }
+}
+
 pub async fn record_state_machine_state(state: &State) {
     *STATE_MACHINE_STATE.get().await.lock().await = *state;
 }

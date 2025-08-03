@@ -16,7 +16,7 @@ use crate::tasks::flash_writer::{
 };
 use crate::tasks::gpio_input::INPUTS;
 use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
-use crate::tasks::state_machine::{STATE_MACHINE_EVENT_CHANNEL, StateMachineEvents};
+use crate::tasks::state_machine::{get_state_machine_state, state_as_u8, StateMachineEvents, STATE_MACHINE_EVENT_CHANNEL};
 use crc::{CRC_32_ISO_HDLC, Crc};
 use defmt::{debug, error, info};
 use embassy_executor::task;
@@ -414,9 +414,8 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     }
                     // Query state machine state
                     0x15 => {
-                        // TODO: Implement state machine state query
-                        // For now, return a placeholder value
-                        let state_value: u8 = 0x01; // Placeholder
+                        let state = get_state_machine_state().await;
+                        let state_value = state_as_u8(&state);
                         respond(&mut device, &[state_value]).await
                     }
                     // Query watchdog elapsed time (always returns 0x00)
