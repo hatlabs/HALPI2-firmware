@@ -122,9 +122,9 @@ async fn main(spawner: Spawner) {
         .spawn(tasks::led_blinker::led_blinker_task(r.rgb_led))
         .unwrap();
 
-    //spawner
-    //    .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
-    //    .unwrap();
+    spawner
+        .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
+        .unwrap();
 
     spawner
         .spawn(tasks::watchdog_feeder::watchdog_feeder_task())
