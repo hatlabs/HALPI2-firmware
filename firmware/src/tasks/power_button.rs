@@ -7,6 +7,7 @@ use embassy_time::{Duration, Timer};
 use crate::config_resources::PowerButtonResources;
 
 
+#[allow(dead_code)]
 pub enum PowerButtonEvents {
     Press,
     Release,
