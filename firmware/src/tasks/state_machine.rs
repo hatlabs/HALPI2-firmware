@@ -393,7 +393,7 @@ impl HalpiStateMachine {
             Event::Tick => {
                 let now = Instant::now();
                 if now.duration_since(*entry_time)
-                    > Duration::from_secs(HOST_WATCHDOG_REBOOT_DURATION_MS as u64)
+                    > Duration::from_millis(HOST_WATCHDOG_REBOOT_DURATION_MS as u64)
                 {
                     Transition(State::off(Instant::now()))
                 } else {
