@@ -135,6 +135,23 @@ pub async fn get_state_machine_state() -> State {
     *STATE_MACHINE_STATE.get().await.lock().await
 }
 
+pub fn state_as_str(state: &State) -> &'static str {
+    match state {
+        State::OffNoVin {} => "OffNoVin",
+        State::OffCharging {} => "OffCharging",
+        State::Booting {} => "Booting",
+        State::On { co_op_enabled: false, .. } => "OnSolo",
+        State::On { co_op_enabled: true, .. } => "OnCoOp",
+        State::Depleting { co_op_enabled: false, .. } => "DepletingSolo",
+        State::Depleting { co_op_enabled: true, .. } => "DepletingCoOp",
+        State::Shutdown { .. } => "Shutdown",
+        State::Off { .. } => "Off",
+        State::WatchdogAlert { .. } => "WatchdogAlert",
+        State::StandbyShutdown {} => "StandbyShutdown",
+        State::Standby {} => "Standby",
+    }
+}
+
 pub fn state_as_u8(state: &State) -> u8 {
     match state {
         State::OffNoVin {} => 0,

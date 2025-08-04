@@ -1,7 +1,7 @@
 use defmt::debug;
 use embassy_time::{Duration, Timer};
 
-use crate::{OM_WATCHDOG, tasks};
+use crate::{tasks::{self, state_machine::{get_state_machine_state, state_as_str}}, OM_WATCHDOG};
 
 #[embassy_executor::task]
 pub async fn watchdog_feeder_task() {
@@ -13,8 +13,10 @@ pub async fn watchdog_feeder_task() {
         OM_WATCHDOG.get().await.lock().await.feed(); // Feed the watchdog
 
         let inputs = tasks::gpio_input::INPUTS.lock().await;
+        let state_str = state_as_str(&get_state_machine_state().await);
         debug!(
-            "vin: {:?} | vscap: {:?} | iin: {:?} | mcu_temp: {:?} | pcb_temp: {:?} | cm_on: {:?} | led_pwr: {:?} | led_active: {:?} | pg_5v: {:?} ",
+            "state: {} | vin: {:?} | vscap: {:?} | iin: {:?} | mcu_temp: {:?} | pcb_temp: {:?} | cm_on: {:?} | led_pwr: {:?} | led_active: {:?} | pg_5v: {:?} ",
+            state_str,
             inputs.vin,
             inputs.vscap,
             inputs.iin,
