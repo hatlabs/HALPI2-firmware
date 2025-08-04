@@ -247,6 +247,8 @@ impl HalpiStateMachine {
                     if context.host_watchdog_timeout_ms == 0 {
                         warn!("Host watchdog is disabled, but we are in co-op mode.");
                         *co_op_enabled = false;
+                        // Update LED pattern when switching from co-op to solo mode
+                        context.set_led_pattern(&State::on(false)).await;
                         return Super;
                     }
                     if Instant::now().duration_since(context.host_watchdog_last_ping)
@@ -259,7 +261,12 @@ impl HalpiStateMachine {
             }
             Event::SetWatchdogTimeout(timeout) => {
                 context.host_watchdog_timeout_ms = *timeout;
-                *co_op_enabled = *timeout > 0;
+                let new_co_op_enabled = *timeout > 0;
+                if *co_op_enabled != new_co_op_enabled {
+                    *co_op_enabled = new_co_op_enabled;
+                    // Update LED pattern when co-op mode changes
+                    context.set_led_pattern(&State::on(*co_op_enabled)).await;
+                }
                 Super
             }
             Event::StandbyShutdown => Transition(State::standby_shutdown()),
