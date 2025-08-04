@@ -73,6 +73,12 @@ function attach {
   monitor $@
 }
 
+function flash-and-monitor {
+  # Flash the firmware and then attach the monitor.
+  cargo flash --chip RP2040
+  monitor $@
+}
+
 function build-bootloader {
   cargo build -p bootloader --release $@
 }
