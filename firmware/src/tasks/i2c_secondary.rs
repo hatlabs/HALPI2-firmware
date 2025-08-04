@@ -46,6 +46,7 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Read  0x21: Query supercap voltage (2 bytes, scaled u16)
 // - Read  0x22: Query DC IN current (2 bytes, scaled u16)
 // - Read  0x23: Query MCU temperature (2 bytes, scaled u16)
+// - Read  0x24: Query PCB temperature (2 bytes, scaled u16)
 // - Write 0x30: [ANY]: Initiate shutdown
 // - Write 0x31: [ANY]: Initiate sleep shutdown
 // - Read  0x50: Query VIN correction scale (4 bytes, f32)
@@ -449,6 +450,15 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     // Query MCU temperature
                     0x23 => {
                         let temp = inputs.mcu_temp;
+                        let temp_bytes = ((65535.0 * (temp - MIN_TEMPERATURE_VALUE)
+                            / (MAX_TEMPERATURE_VALUE - MIN_TEMPERATURE_VALUE))
+                            as u16)
+                            .to_be_bytes();
+                        respond(&mut device, &temp_bytes).await
+                    }
+                    // Query PCB temperature
+                    0x24 => {
+                        let temp = inputs.pcb_temp;
                         let temp_bytes = ((65535.0 * (temp - MIN_TEMPERATURE_VALUE)
                             / (MAX_TEMPERATURE_VALUE - MIN_TEMPERATURE_VALUE))
                             as u16)

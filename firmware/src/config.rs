@@ -45,8 +45,8 @@ pub const FLASH_SIZE: usize = 4 * 1024 * 1024;
 pub const LED_BRIGHTNESS_CONFIG_KEY: u16 = 0x1001;
 pub const DEFAULT_LED_BRIGHTNESS: u8 = 0x30; // Default brightness value
 
-pub const MIN_TEMPERATURE_VALUE: f32 = 274.15 - 40.0; // Minimum temperature value
-pub const MAX_TEMPERATURE_VALUE: f32 = 274.15 + 100.0; // Maximum temperature value
+pub const MIN_TEMPERATURE_VALUE: f32 = 273.15 - 40.0; // Minimum temperature value
+pub const MAX_TEMPERATURE_VALUE: f32 = 273.15 + 100.0; // Maximum temperature value
 
 pub const MAX_FLASH_WRITE_QUEUE_DEPTH: usize = 4; // Adjust based on available RAM
 pub const FLASH_ERASE_BLOCK_SIZE: usize = 4096;
