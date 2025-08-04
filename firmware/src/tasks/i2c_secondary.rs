@@ -10,6 +10,7 @@ use crate::tasks::config_manager::{
     get_iin_correction_scale, set_iin_correction_scale,
     set_vscap_power_on_threshold, get_vscap_power_on_threshold,
     set_vscap_power_off_threshold, get_vscap_power_off_threshold,
+    get_auto_restart, set_auto_restart,
 };
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
@@ -42,6 +43,8 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Read  0x16: Query watchdog elapsed (always returns 0x00)
 // - Read  0x17: Query LED brightness setting (1 byte)
 // - Write 0x17 [NN]: Set LED brightness to NN
+// - Read  0x18: Query auto restart setting (1 byte, 0=disabled, 1=enabled)
+// - Write 0x18 [NN]: Set auto restart to NN (0=disabled, 1=enabled)
 // - Read  0x20: Query DC IN voltage (2 bytes, scaled u16)
 // - Read  0x21: Query supercap voltage (2 bytes, scaled u16)
 // - Read  0x22: Query DC IN current (2 bytes, scaled u16)
@@ -232,6 +235,12 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         let brightness = buf[1];
                         info!("Setting LED brightness to {}", brightness);
                         set_led_brightness(brightness).await;
+                    }
+                    // Set auto restart
+                    0x18 => {
+                        let auto_restart = buf[1] != 0;
+                        info!("Setting auto restart to {}", auto_restart);
+                        set_auto_restart(auto_restart).await;
                     }
                     // Initiate shutdown
                     0x30 => {
@@ -425,6 +434,11 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x17 => {
                         let brightness = get_led_brightness().await;
                         respond(&mut device, &[brightness]).await
+                    }
+                    // Query auto restart setting
+                    0x18 => {
+                        let auto_restart = get_auto_restart().await;
+                        respond(&mut device, &[auto_restart as u8]).await
                     }
                     // Query DC IN voltage
                     0x20 => {

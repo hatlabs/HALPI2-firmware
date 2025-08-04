@@ -48,6 +48,7 @@ pub enum ConfigManagerEvents {
     VscapCorrectionScale(f32),
     VinCorrectionScale(f32),
     IinCorrectionScale(f32),
+    AutoRestart(bool),
 }
 
 pub type ConfigManagerChannelType =
@@ -195,6 +196,7 @@ struct RuntimeConfig {
     pub vin_correction_scale: f32,
     pub vscap_correction_scale: f32,
     pub iin_correction_scale: f32,
+    pub auto_restart: bool,
 }
 
 impl RuntimeConfig {
@@ -208,6 +210,7 @@ impl RuntimeConfig {
         vin_correction_scale: f32,
         vscap_correction_scale: f32,
         iin_correction_scale: f32,
+        auto_restart: bool,
     ) -> Self {
         RuntimeConfig {
             vscap_power_on_threshold,
@@ -219,6 +222,7 @@ impl RuntimeConfig {
             vin_correction_scale,
             vscap_correction_scale,
             iin_correction_scale,
+            auto_restart,
         }
     }
 }
@@ -234,6 +238,7 @@ static RUNTIME_CONFIG: Mutex<CriticalSectionRawMutex, RuntimeConfig> =
         DEFAULT_VIN_CORRECTION_SCALE,
         DEFAULT_VSCAP_CORRECTION_SCALE,
         DEFAULT_IIN_CORRECTION_SCALE,
+        DEFAULT_AUTO_RESTART,
     ));
 
 pub async fn get_vscap_power_on_threshold() -> f32 {
@@ -274,6 +279,10 @@ pub async fn get_vscap_correction_scale() -> f32 {
 pub async fn get_iin_correction_scale() -> f32 {
     let config = RUNTIME_CONFIG.lock().await;
     config.iin_correction_scale
+}
+pub async fn get_auto_restart() -> bool {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.auto_restart
 }
 pub async fn set_vscap_power_on_threshold(value: f32) {
     let mut config = RUNTIME_CONFIG.lock().await;
@@ -341,6 +350,13 @@ pub async fn set_iin_correction_scale(value: f32) {
         .send(ConfigManagerEvents::IinCorrectionScale(value))
         .await;
 }
+pub async fn set_auto_restart(value: bool) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.auto_restart = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::AutoRestart(value))
+        .await;
+}
 
 pub async fn init_config_manager(
     flash: &'static MFlashType<'static>,
@@ -397,6 +413,12 @@ pub async fn init_config_manager(
             .unwrap_or(None)
             .unwrap_or(DEFAULT_LED_BRIGHTNESS);
         debug!("Received led brightness: {}", led_brightness);
+        let auto_restart = config_manager
+            .get::<bool>(AUTO_RESTART_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_AUTO_RESTART);
+        debug!("Received auto restart: {}", auto_restart);
 
         let mut runtime_config = RUNTIME_CONFIG.lock().await;
         runtime_config.vscap_power_on_threshold = vscap_power_on_threshold;
@@ -405,6 +427,7 @@ pub async fn init_config_manager(
         runtime_config.shutdown_wait_duration_ms = shutdown_wait_duration_ms;
         runtime_config.watchdog_timeout_ms = watchdog_timeout_ms;
         runtime_config.led_brightness = led_brightness;
+        runtime_config.auto_restart = auto_restart;
     }
     info!("Runtime configuration updated");
     config_manager_mutex
@@ -481,6 +504,12 @@ pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
             ConfigManagerEvents::IinCorrectionScale(value) => {
                 config_manager
                     .set(IIN_CORRECTION_SCALE_CONFIG_KEY, &value)
+                    .await
+                    .unwrap();
+            }
+            ConfigManagerEvents::AutoRestart(value) => {
+                config_manager
+                    .set(AUTO_RESTART_CONFIG_KEY, &value)
                     .await
                     .unwrap();
             }

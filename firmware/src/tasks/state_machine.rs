@@ -1,5 +1,5 @@
 use crate::led_patterns::get_state_pattern;
-use crate::tasks::config_manager::get_shutdown_wait_duration_ms;
+use crate::tasks::config_manager::{get_auto_restart, get_shutdown_wait_duration_ms};
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
 use alloc::vec::Vec;
@@ -30,6 +30,7 @@ pub enum StateMachineEvents {
     Off,
     SetHostWatchdogTimeout(u16),
     HostWatchdogPing,
+    PowerButtonPress,
 }
 
 pub type StateMachineChannelType =
@@ -50,6 +51,7 @@ pub enum Event {
     Off,
     SetWatchdogTimeout(u16),
     WatchdogPing,
+    PowerButtonPress,
 }
 
 /// GPIO outputs that are controlled by the state machine task.
@@ -243,8 +245,8 @@ impl HalpiStateMachine {
     #[superstate]
     async fn powered_on(event: &Event, context: &mut Context) -> Outcome<State> {
         match event {
-            Event::CmOff => Transition(State::off(Instant::now())),
-            Event::Off => Transition(State::off(Instant::now())), // Force immediate shutdown
+            Event::CmOff => Transition(State::off(Instant::now(), true)), // Normal shutdown - CM5 turned itself off
+            Event::Off => Transition(State::off(Instant::now(), true)), // Force immediate shutdown
             Event::WatchdogPing => {
                 context.host_watchdog_last_ping = Instant::now();
                 Handled
@@ -351,6 +353,7 @@ impl HalpiStateMachine {
     }
 
     /// Shutdown state, where the system is waiting for the shutdown to complete.
+    /// This state is only reached during power-loss scenarios.
     #[allow(unused_variables)]
     #[state(entry_action = "enter_shutdown")]
     async fn shutdown(
@@ -365,12 +368,12 @@ impl HalpiStateMachine {
                 if now.duration_since(*entry_time)
                     > Duration::from_millis(shutdown_wait_duration_ms as u64)
                 {
-                    Transition(State::off(Instant::now()))
+                    Transition(State::off(Instant::now(), false)) // Power-loss shutdown (timeout)
                 } else {
                     Super
                 }
             }
-            Event::CmOff => Transition(State::off(Instant::now())),
+            Event::CmOff => Transition(State::off(Instant::now(), false)), // Power-loss shutdown (CM5 shut down gracefully)
             _ => Super,
         }
     }
@@ -381,19 +384,47 @@ impl HalpiStateMachine {
     }
 
     /// Turned off. Will reboot after 5 seconds if no VIN power is detected.
+    /// For intentional shutdowns, respects auto_restart setting.
+    /// For power-loss shutdowns, always restarts automatically.
     #[allow(unused_variables)]
     #[state(entry_action = "enter_off")]
-    async fn off(entry_time: &mut Instant, event: &Event, context: &mut Context) -> Outcome<State> {
+    async fn off(
+        entry_time: &mut Instant,
+        intentional_shutdown: &mut bool,
+        event: &Event,
+        context: &mut Context
+    ) -> Outcome<State> {
         match event {
             Event::Tick => {
                 let now = Instant::now();
                 if now.duration_since(*entry_time)
                     > Duration::from_millis(OFF_STATE_DURATION_MS as u64)
                 {
-                    SCB::sys_reset();
+                    if *intentional_shutdown {
+                        // For intentional shutdowns, respect the auto_restart setting
+                        let auto_restart = get_auto_restart().await;
+                        if auto_restart {
+                            SCB::sys_reset();
+                        }
+                        // If auto_restart is false, stay in off state indefinitely
+                    } else {
+                        // For power-loss shutdowns, always restart automatically
+                        SCB::sys_reset();
+                    }
+                    Super
                 } else {
                     Super
                 }
+            }
+            Event::PowerButtonPress => {
+                // Power button press always triggers restart, regardless of auto_restart setting
+                info!("Power button press detected in off state, restarting system");
+                SCB::sys_reset();
+            }
+            Event::VinPowerOff => {
+                // VIN power loss always triggers restart, regardless of auto_restart setting
+                info!("VIN power loss detected in off state, restarting system");
+                SCB::sys_reset();
             }
             _ => Super,
         }
@@ -402,7 +433,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_off(context: &mut Context) {
         context.outputs.power_off();
-        context.set_led_pattern(&State::off(Instant::now())).await;
+        context.set_led_pattern(&State::off(Instant::now(), false)).await;
     }
 
     // This state is triggered if the host watchdog is enabled and a watchdog timeout occurs.
@@ -419,7 +450,7 @@ impl HalpiStateMachine {
                 if now.duration_since(*entry_time)
                     > Duration::from_millis(HOST_WATCHDOG_REBOOT_DURATION_MS as u64)
                 {
-                    Transition(State::off(Instant::now()))
+                    Transition(State::off(Instant::now(), false)) // Power-loss shutdown
                 } else {
                     Super
                 }
@@ -525,6 +556,9 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
                 }
                 StateMachineEvents::Off => {
                     events_to_process.push(Event::Off);
+                }
+                StateMachineEvents::PowerButtonPress => {
+                    events_to_process.push(Event::PowerButtonPress);
                 }
             }
         }
