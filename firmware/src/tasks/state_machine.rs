@@ -1,4 +1,4 @@
-use crate::led_patterns::get_state_pattern;
+use crate::led_patterns::{get_state_pattern, get_vscap_alarm_pattern};
 use crate::tasks::config_manager::{get_auto_restart, get_shutdown_wait_duration_ms, get_solo_depleting_timeout_ms};
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
@@ -44,6 +44,7 @@ pub enum Event {
     VinPowerOn,
     VinPowerOff,
     VscapReady,
+    VscapAlarm,
     CmOn,
     CmOff,
     Shutdown,
@@ -101,6 +102,7 @@ pub struct Context {
     pub led_blinker_channel: &'static LEDBlinkerChannelType,
     pub host_watchdog_timeout_ms: u16,
     pub host_watchdog_last_ping: Instant,
+    pub vscap_alarm_active: bool,
 }
 
 impl Context {
@@ -116,6 +118,7 @@ impl Context {
             led_blinker_channel,
             host_watchdog_timeout_ms,
             host_watchdog_last_ping: Instant::now(),
+            vscap_alarm_active: false,
         }
     }
 
@@ -123,6 +126,13 @@ impl Context {
         let _ = self
             .led_blinker_channel
             .send(LEDBlinkerEvents::SetPattern(get_state_pattern(state)))
+            .await;
+    }
+
+    async fn set_alarm_led_pattern(&self) {
+        let _ = self
+            .led_blinker_channel
+            .send(LEDBlinkerEvents::SetPattern(get_vscap_alarm_pattern()))
             .await;
     }
 
@@ -249,6 +259,13 @@ impl HalpiStateMachine {
             Event::Off => Transition(State::off(Instant::now(), true)), // Force immediate shutdown
             Event::WatchdogPing => {
                 context.host_watchdog_last_ping = Instant::now();
+                Handled
+            }
+            Event::VscapAlarm => {
+                warn!("Vscap voltage alarm activated!");
+                context.vscap_alarm_active = true;
+                // Override LED pattern with alarm pattern
+                context.set_alarm_led_pattern().await;
                 Handled
             }
             _ => Super,
@@ -596,6 +613,12 @@ pub async fn state_machine_task(smor: StateMachineOutputResources) {
                 events_to_process.push(Event::CmOff);
             }
             prev_cm_on = cm_on;
+        }
+
+        // Vscap alarm detection
+        let vscap_alarm = inputs.vscap > VSCAP_MAX_ALARM;
+        if vscap_alarm && !context.vscap_alarm_active {
+            events_to_process.push(Event::VscapAlarm);
         }
 
         // Add a regular tick event

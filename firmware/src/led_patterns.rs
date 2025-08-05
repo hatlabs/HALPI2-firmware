@@ -40,3 +40,10 @@ pub fn get_state_pattern(state: &State) -> LEDPattern {
         State::Standby {} => LEDPattern::new(vec![Box::new(OneColor::new(100, DARK_RED))]),
     }
 }
+
+pub fn get_vscap_alarm_pattern() -> LEDPattern {
+    LEDPattern::new(vec![
+        Box::new(OneColor::new(100, RED)),
+        Box::new(OneColor::new(100, BLACK)),
+    ])
+}
