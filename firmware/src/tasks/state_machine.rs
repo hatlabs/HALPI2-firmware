@@ -1,5 +1,5 @@
 use crate::led_patterns::get_state_pattern;
-use crate::tasks::config_manager::{get_auto_restart, get_shutdown_wait_duration_ms};
+use crate::tasks::config_manager::{get_auto_restart, get_shutdown_wait_duration_ms, get_solo_depleting_timeout_ms};
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
 use alloc::vec::Vec;
@@ -319,9 +319,10 @@ impl HalpiStateMachine {
             Event::Tick => {
                 if !*co_op_enabled {
                     // Solo mode: trigger shutdown after timeout
+                    let solo_depleting_timeout_ms = get_solo_depleting_timeout_ms().await;
                     let now = Instant::now();
                     if now.duration_since(*entry_time)
-                        > Duration::from_millis(DEFAULT_DEPLETING_TIMEOUT_MS as u64)
+                        > Duration::from_millis(solo_depleting_timeout_ms as u64)
                     {
                         context
                             .send_power_button_event(PowerButtonEvents::DoubleClick)

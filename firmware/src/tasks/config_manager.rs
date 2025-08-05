@@ -43,6 +43,7 @@ pub enum ConfigManagerEvents {
     VscapPowerOffThreshold(f32),
     VinPowerThreshold(f32),
     ShutdownWaitDurationMs(u32),
+    SoloDepletingTimeoutMs(u32),
     WatchdogTimeoutMs(u16),
     LedBrightness(u8),
     VscapCorrectionScale(f32),
@@ -191,6 +192,7 @@ struct RuntimeConfig {
     pub vscap_power_off_threshold: f32,
     pub vin_power_threshold: f32,
     pub shutdown_wait_duration_ms: u32,
+    pub solo_depleting_timeout_ms: u32,
     pub watchdog_timeout_ms: u16,
     pub led_brightness: u8,
     pub vin_correction_scale: f32,
@@ -205,6 +207,7 @@ impl RuntimeConfig {
         vscap_power_off_threshold: f32,
         vin_power_threshold: f32,
         shutdown_wait_duration_ms: u32,
+        solo_depleting_timeout_ms: u32,
         watchdog_timeout_ms: u16,
         led_brightness: u8,
         vin_correction_scale: f32,
@@ -217,6 +220,7 @@ impl RuntimeConfig {
             vscap_power_off_threshold,
             vin_power_threshold,
             shutdown_wait_duration_ms,
+            solo_depleting_timeout_ms,
             watchdog_timeout_ms,
             led_brightness,
             vin_correction_scale,
@@ -233,6 +237,7 @@ static RUNTIME_CONFIG: Mutex<CriticalSectionRawMutex, RuntimeConfig> =
         DEFAULT_VSCAP_POWER_OFF_THRESHOLD,
         DEFAULT_VIN_POWER_THRESHOLD,
         DEFAULT_SHUTDOWN_WAIT_DURATION_MS,
+        DEFAULT_SOLO_DEPLETING_TIMEOUT_MS,
         HOST_WATCHDOG_DEFAULT_TIMEOUT_MS,
         DEFAULT_LED_BRIGHTNESS,
         DEFAULT_VIN_CORRECTION_SCALE,
@@ -258,6 +263,10 @@ pub async fn get_vin_power_threshold() -> f32 {
 pub async fn get_shutdown_wait_duration_ms() -> u32 {
     let config = RUNTIME_CONFIG.lock().await;
     config.shutdown_wait_duration_ms
+}
+pub async fn get_solo_depleting_timeout_ms() -> u32 {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.solo_depleting_timeout_ms
 }
 #[allow(dead_code)]
 pub async fn get_watchdog_timeout_ms() -> u16 {
@@ -312,6 +321,13 @@ pub async fn set_shutdown_wait_duration_ms(value: u32) {
     config.shutdown_wait_duration_ms = value;
     CONFIG_MANAGER_EVENT_CHANNEL
         .send(ConfigManagerEvents::ShutdownWaitDurationMs(value))
+        .await;
+}
+pub async fn set_solo_depleting_timeout_ms(value: u32) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.solo_depleting_timeout_ms = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::SoloDepletingTimeoutMs(value))
         .await;
 }
 #[allow(dead_code)]
@@ -401,6 +417,15 @@ pub async fn init_config_manager(
             "Received shutdown wait duration: {}",
             shutdown_wait_duration_ms
         );
+        let solo_depleting_timeout_ms = config_manager
+            .get::<u32>(SOLO_DEPLETING_TIMEOUT_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_SOLO_DEPLETING_TIMEOUT_MS);
+        debug!(
+            "Received solo depleting timeout: {}",
+            solo_depleting_timeout_ms
+        );
         let watchdog_timeout_ms = config_manager
             .get::<u16>(HOST_WATCHDOG_TIMEOUT_CONFIG_KEY)
             .await
@@ -425,6 +450,7 @@ pub async fn init_config_manager(
         runtime_config.vscap_power_off_threshold = vscap_power_off_threshold;
         runtime_config.vin_power_threshold = vin_power_threshold;
         runtime_config.shutdown_wait_duration_ms = shutdown_wait_duration_ms;
+        runtime_config.solo_depleting_timeout_ms = solo_depleting_timeout_ms;
         runtime_config.watchdog_timeout_ms = watchdog_timeout_ms;
         runtime_config.led_brightness = led_brightness;
         runtime_config.auto_restart = auto_restart;
@@ -474,6 +500,12 @@ pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
             ConfigManagerEvents::ShutdownWaitDurationMs(value) => {
                 config_manager
                     .set(SHUTDOWN_WAIT_DURATION_CONFIG_KEY, &value)
+                    .await
+                    .unwrap();
+            }
+            ConfigManagerEvents::SoloDepletingTimeoutMs(value) => {
+                config_manager
+                    .set(SOLO_DEPLETING_TIMEOUT_CONFIG_KEY, &value)
                     .await
                     .unwrap();
             }

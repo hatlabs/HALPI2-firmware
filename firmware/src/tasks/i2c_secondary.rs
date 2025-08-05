@@ -11,6 +11,7 @@ use crate::tasks::config_manager::{
     set_vscap_power_on_threshold, get_vscap_power_on_threshold,
     set_vscap_power_off_threshold, get_vscap_power_off_threshold,
     get_auto_restart, set_auto_restart,
+    get_solo_depleting_timeout_ms, set_solo_depleting_timeout_ms,
 };
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
@@ -45,6 +46,8 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Write 0x17 [NN]: Set LED brightness to NN
 // - Read  0x18: Query auto restart setting (1 byte, 0=disabled, 1=enabled)
 // - Write 0x18 [NN]: Set auto restart to NN (0=disabled, 1=enabled)
+// - Read  0x19: Query solo depleting timeout (4 bytes, milliseconds, big-endian)
+// - Write 0x19 [NN NN NN NN]: Set solo depleting timeout to NNNNNNNN ms (u32, big-endian)
 // - Read  0x20: Query DC IN voltage (2 bytes, scaled u16)
 // - Read  0x21: Query supercap voltage (2 bytes, scaled u16)
 // - Read  0x22: Query DC IN current (2 bytes, scaled u16)
@@ -241,6 +244,16 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         let auto_restart = buf[1] != 0;
                         info!("Setting auto restart to {}", auto_restart);
                         set_auto_restart(auto_restart).await;
+                    }
+                    // Set solo depleting timeout
+                    0x19 => {
+                        if buf.len() < 5 {
+                            info!("Invalid solo depleting timeout data length");
+                        } else {
+                            let timeout_ms = u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]);
+                            info!("Setting solo depleting timeout to {} ms", timeout_ms);
+                            set_solo_depleting_timeout_ms(timeout_ms).await;
+                        }
                     }
                     // Initiate shutdown
                     0x30 => {
@@ -439,6 +452,12 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x18 => {
                         let auto_restart = get_auto_restart().await;
                         respond(&mut device, &[auto_restart as u8]).await
+                    }
+                    // Query solo depleting timeout
+                    0x19 => {
+                        let timeout_ms = get_solo_depleting_timeout_ms().await;
+                        let bytes = timeout_ms.to_be_bytes();
+                        respond(&mut device, &bytes).await
                     }
                     // Query DC IN voltage
                     0x20 => {
