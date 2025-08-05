@@ -9,12 +9,12 @@ use crate::tasks::state_machine::State;
 
 pub fn get_state_pattern(state: &State) -> LEDPattern {
     match state {
-        State::OffNoVin {} => LEDPattern::new(vec![Box::new(Colors::new(
+        State::PowerOff {} => LEDPattern::new(vec![Box::new(Colors::new(
             100,
             [BLACK, BLACK, BLACK, BLACK, RED],
         ))]),
         State::OffCharging {} => LEDPattern::new(vec![Box::new(SupercapBar::new(1000, RED))]),
-        State::Booting {} => LEDPattern::new(vec![
+        State::SystemStartup {} => LEDPattern::new(vec![
             Box::new(RoyalRainbow::new(1280, true)),
             Box::new(OneColor::new(1000, RED)),
             Box::new(OneColor::new(1000, GREEN)),
@@ -25,18 +25,18 @@ pub fn get_state_pattern(state: &State) -> LEDPattern {
             Box::new(OneColor::new(1000, WHITE)),
             Box::new(Off::new(1000)),
         ]),
-        State::On { co_op_enabled: false } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, YELLOW))]),
-        State::On { co_op_enabled: true } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, GREEN))]),
-        State::Depleting { co_op_enabled: false, .. } => {
+        State::Operational { co_op_enabled: false } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, YELLOW))]),
+        State::Operational { co_op_enabled: true } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, GREEN))]),
+        State::Blackout { co_op_enabled: false, .. } => {
             LEDPattern::new(vec![Box::new(SupercapBar::new(100, ORANGE))])
         }
-        State::Depleting { co_op_enabled: true, .. } => {
+        State::Blackout { co_op_enabled: true, .. } => {
             LEDPattern::new(vec![Box::new(SupercapBar::new(100, DARK_OLIVE_GREEN))])
         }
-        State::Shutdown { .. } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, PURPLE))]),
-        State::Off { .. } => LEDPattern::new(vec![Box::new(OneColor::new(100, BLACK))]),
-        State::WatchdogAlert { .. } => LEDPattern::new(vec![Box::new(OneColor::new(100, RED))]),
-        State::StandbyShutdown {} => LEDPattern::new(vec![Box::new(OneColor::new(100, BLUE))]),
+        State::GracefulShutdown { .. } => LEDPattern::new(vec![Box::new(SupercapBar::new(100, PURPLE))]),
+        State::PoweredDown { .. } => LEDPattern::new(vec![Box::new(OneColor::new(100, BLACK))]),
+        State::HostUnresponsive { .. } => LEDPattern::new(vec![Box::new(OneColor::new(100, RED))]),
+        State::EnteringStandby {} => LEDPattern::new(vec![Box::new(OneColor::new(100, BLUE))]),
         State::Standby {} => LEDPattern::new(vec![Box::new(OneColor::new(100, DARK_RED))]),
     }
 }
