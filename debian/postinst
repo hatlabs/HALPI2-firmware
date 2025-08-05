@@ -26,6 +26,9 @@ FIRMWARE_PATH=$(dpkg -L $DPKG_MAINTSCRIPT_PACKAGE | grep -E '\.bin$$' | head -n 
 AUTO_FLASH_ON_INSTALL="yes"
 FLASH_TIMEOUT="30"
 
+# Ensure configuration directory exists
+mkdir -p "$(dirname "$CONFIG_FILE")"
+
 # Source configuration if it exists
 if [ -f "$CONFIG_FILE" ]; then
     . "$CONFIG_FILE"
@@ -49,7 +52,7 @@ case "$1" in
         fi
 
         # Check if hardware is accessible
-        if ! halpi firmware-version >/dev/null 2>&1; then
+        if ! halpi get firmware_version >/dev/null 2>&1; then
             echo "Warning: HALPI2 hardware not accessible. Firmware not flashed."
             echo "Run 'sudo halpi flash $FIRMWARE_PATH' manually when hardware is connected."
             exit 0

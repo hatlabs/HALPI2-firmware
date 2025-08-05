@@ -1,3 +1,9 @@
+halpi2-firmware (3.1.0) stable; urgency=medium
+
+  * Automated release 3.1.0. See GitHub for details.
+
+ -- Hat Labs CI <info@hatlabs.fi>  Tue, 05 Aug 2025 08:53:07 +0000
+
 halpi2-firmware (3.0.0~a1) unstable; urgency=medium
 
   * Initial release.
