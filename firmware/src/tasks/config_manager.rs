@@ -237,7 +237,7 @@ static RUNTIME_CONFIG: Mutex<CriticalSectionRawMutex, RuntimeConfig> =
         DEFAULT_VSCAP_POWER_OFF_THRESHOLD,
         DEFAULT_VIN_POWER_THRESHOLD,
         DEFAULT_SHUTDOWN_WAIT_DURATION_MS,
-        DEFAULT_SOLO_DEPLETING_TIMEOUT_MS,
+        DEFAULT_SOLO_BLACKOUT_TIMEOUT_MS,
         HOST_WATCHDOG_DEFAULT_TIMEOUT_MS,
         DEFAULT_LED_BRIGHTNESS,
         DEFAULT_VIN_CORRECTION_SCALE,
@@ -418,10 +418,10 @@ pub async fn init_config_manager(
             shutdown_wait_duration_ms
         );
         let solo_depleting_timeout_ms = config_manager
-            .get::<u32>(SOLO_DEPLETING_TIMEOUT_CONFIG_KEY)
+            .get::<u32>(SOLO_BLACKOUT_TIMEOUT_CONFIG_KEY)
             .await
             .unwrap_or(None)
-            .unwrap_or(DEFAULT_SOLO_DEPLETING_TIMEOUT_MS);
+            .unwrap_or(DEFAULT_SOLO_BLACKOUT_TIMEOUT_MS);
         debug!(
             "Received solo depleting timeout: {}",
             solo_depleting_timeout_ms
@@ -505,7 +505,7 @@ pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
             }
             ConfigManagerEvents::SoloDepletingTimeoutMs(value) => {
                 config_manager
-                    .set(SOLO_DEPLETING_TIMEOUT_CONFIG_KEY, &value)
+                    .set(SOLO_BLACKOUT_TIMEOUT_CONFIG_KEY, &value)
                     .await
                     .unwrap();
             }

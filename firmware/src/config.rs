@@ -28,8 +28,8 @@ pub const DEFAULT_SHUTDOWN_WAIT_DURATION_MS: u32 = 60_000; // ms
 pub const SHUTDOWN_WAIT_DURATION_CONFIG_KEY: u16 = 0x1005;
 
 // Time to wait for the device to start shutting down once the power is cut.
-pub const DEFAULT_SOLO_DEPLETING_TIMEOUT_MS: u32 = 5_000; // ms
-pub const SOLO_DEPLETING_TIMEOUT_CONFIG_KEY: u16 = 0x1007;
+pub const DEFAULT_SOLO_BLACKOUT_TIMEOUT_MS: u32 = 5_000; // ms
+pub const SOLO_BLACKOUT_TIMEOUT_CONFIG_KEY: u16 = 0x1007;
 
 // how long to stay in off state until restarting
 pub const OFF_STATE_DURATION_MS: u32 = 5000; // ms
