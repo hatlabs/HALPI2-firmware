@@ -17,7 +17,9 @@ pub const DEFAULT_VIN_CORRECTION_SCALE: f32 = 1.015; // Default correction scale
 pub const VIN_CORRECTION_SCALE_CONFIG_KEY: u16 = 0x1008; // Key for VIN correction scale in the config
 
 pub const IIN_MAX_VALUE: f32 = 3.3; // V; Maximum voltage for Iin
-pub const DEFAULT_IIN_CORRECTION_SCALE: f32 = 1.0; // Default correction scale for Iin
+// Default correction scale for Iin. The default value is experimentally determined to correct
+// scaling error present in the 0.4.0 hardware.
+pub const DEFAULT_IIN_CORRECTION_SCALE: f32 = 0.8115330908816603;
 pub const IIN_CORRECTION_SCALE_CONFIG_KEY: u16 = 0x1009;
 
 // Time to wait for device to shut down gracefully.
