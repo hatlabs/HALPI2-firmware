@@ -52,7 +52,7 @@ The controller GPIO pins are documented below.
 
 ## State Machine
 
-The controller implements a state machine to manage the power states of the system. The transition
+The controller implements a hierarchical state machine to manage the power states of the system. The transition
 diagram is shown below:
 
 ```mermaid
@@ -61,51 +61,56 @@ config:
   look: handDrawn
 ---
 stateDiagram-v2
-    [*] --> off_no_vin
+    [*] --> PowerOff
 
-    off_no_vin --> off_charging : VinPowerOn
+    PowerOff --> OffCharging : VIN > threshold
+    OffCharging --> PowerOff : VIN ≤ threshold
+    OffCharging --> SystemStartup : vscap ≥ threshold
 
-    off_charging --> booting : VscapReady
-    off_charging --> off_no_vin : VinPowerOff
+    SystemStartup --> PowerOff : VIN ≤ threshold
+    SystemStartup --> OperationalSolo : ComputeModuleOn
 
-    booting --> on_no_watchdog : CmOn
-    booting --> off_no_vin : VinPowerOff
+    OperationalSolo --> OperationalCoOp : SetWatchdogTimeout(>0)
+    OperationalCoOp --> OperationalSolo : SetWatchdogTimeout(0)
 
-    on_no_watchdog --> on_with_watchdog : SetWatchdogTimeout(>0)
-    on_with_watchdog --> on_no_watchdog : SetWatchdogTimeout(0)
+    OperationalSolo --> BlackoutSolo : VIN ≤ threshold
+    OperationalCoOp --> BlackoutCoOp : VIN ≤ threshold
+    OperationalCoOp --> HostUnresponsive : watchdog timeout
 
-    on_no_watchdog --> depleting_no_watchdog : VinPowerOff
-    on_with_watchdog --> depleting_with_watchdog : VinPowerOff
+    OperationalSolo --> EnteringStandby : StandbyShutdown
+    OperationalCoOp --> EnteringStandby : StandbyShutdown
 
-    on_no_watchdog --> off : CmOff
-    on_with_watchdog --> off : CmOff
+    BlackoutSolo --> OperationalSolo : VIN > threshold
+    BlackoutCoOp --> OperationalCoOp : VIN > threshold
 
-    on_no_watchdog --> sleep_shutdown : SleepShutdown
-    on_with_watchdog --> sleep_shutdown : SleepShutdown
+    BlackoutSolo --> BlackoutShutdown : timeout
+    BlackoutCoOp --> BlackoutShutdown : Shutdown
 
-    on_with_watchdog --> watchdog_alert : Tick (timeout)
+    HostUnresponsive --> OperationalCoOp : WatchdogPing
+    HostUnresponsive --> PoweredDownBlackout : timeout
 
-    depleting_no_watchdog --> shutdown : Tick (timeout)
-    depleting_no_watchdog --> on_no_watchdog : VinPowerOn
-    depleting_no_watchdog --> off : CmOff
+    EnteringStandby --> Standby : ComputeModuleOff
+    Standby --> OperationalSolo : ComputeModuleOn
 
-    depleting_with_watchdog --> shutdown : Shutdown
-    depleting_with_watchdog --> on_with_watchdog : VinPowerOn
-    depleting_with_watchdog --> off : CmOff
+    BlackoutShutdown --> PoweredDownBlackout : timeout
+    BlackoutShutdown --> PoweredDownBlackout : ComputeModuleOff
 
-    watchdog_alert --> off : Tick (timeout)
-    watchdog_alert --> on_with_watchdog : WatchdogPing
-    watchdog_alert --> off : CmOff
+    OperationalSolo --> PoweredDownManual : ComputeModuleOff
+    OperationalCoOp --> PoweredDownManual : ComputeModuleOff
+    HostUnresponsive --> PoweredDownManual : ComputeModuleOff
+    EnteringStandby --> PoweredDownManual : ComputeModuleOff
 
-    shutdown --> off : Tick (timeout)
-    shutdown --> off : CmOff
+    OperationalSolo --> PoweredDownManual : Off
+    OperationalCoOp --> PoweredDownManual : Off
+    HostUnresponsive --> PoweredDownManual : Off
+    EnteringStandby --> PoweredDownManual : Off
 
-    off --> [*] : Tick (sys_reset)
+    PoweredDownBlackout --> [*] : timeout (sys_reset)
+    PoweredDownBlackout --> [*] : PowerButtonPress (sys_reset)
 
-    sleep_shutdown --> sleep : CmOff
-    sleep_shutdown --> off : CmOff
-
-    sleep --> on_no_watchdog : CmOn
+    PoweredDownManual --> [*] : timeout + auto_restart (sys_reset)
+    PoweredDownManual --> [*] : PowerButtonPress (sys_reset)
+    PoweredDownManual --> [*] : VIN blackout (sys_reset)
 ```
 
 ## RGB LEDs
