@@ -259,7 +259,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x30 => {
                         info!("Initiating shutdown");
                         STATE_MACHINE_EVENT_CHANNEL
-                            .send(StateMachineEvents::Off)
+                            .send(StateMachineEvents::Shutdown)
                             .await;
                     }
                     // Initiate standby shutdown
