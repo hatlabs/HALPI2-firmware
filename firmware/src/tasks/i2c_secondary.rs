@@ -170,7 +170,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
             },
             Ok(i2c_slave::Command::Write(len)) => {
                 if len < 2 {
-                    error!("Write command too short");
+                    error!("Write command too short: {=[u8]:02x}", &buf[..len]);
                     continue;
                 }
 
