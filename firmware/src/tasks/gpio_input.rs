@@ -13,6 +13,7 @@ use crate::{
 };
 
 use super::power_button::{PowerButtonEvents};
+use crate::tasks::state_machine::{STATE_MACHINE_EVENT_CHANNEL, StateMachineEvents};
 
 /// Input values that are read by the io_task and consumed by other tasks.
 #[derive(Clone, Format)]
@@ -113,6 +114,8 @@ pub async fn power_button_input_task(
         if inputs.pwr_btn {
         } else {
             POWER_BUTTON_EVENT_CHANNEL.send(PowerButtonEvents::Press).await;
+            // Also send wake-up event to state machine for systems in off state
+            STATE_MACHINE_EVENT_CHANNEL.send(StateMachineEvents::PowerButtonPress).await;
         }
     }
 }

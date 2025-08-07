@@ -23,6 +23,7 @@ use crate::tasks::gpio_input::INPUTS;
 
 const NUM_LEDS: usize = 5;
 
+#[allow(dead_code)]
 pub enum LEDBlinkerEvents {
     SetPattern(LEDPattern),
     SetBrightness(u8),
@@ -360,6 +361,7 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
         self.brightness = brightness;
     }
 
+    #[allow(dead_code)]
     fn get_brightness(&self) -> u8 {
         self.brightness
     }

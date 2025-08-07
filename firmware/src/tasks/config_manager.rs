@@ -3,7 +3,6 @@ use embassy_executor::task;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::once_lock::OnceLock;
 use sequential_storage::cache::NoCache;
 use sequential_storage::map::{SerializationError, fetch_item, remove_item, store_item};
 use serde::{Deserialize, Serialize};
@@ -44,11 +43,13 @@ pub enum ConfigManagerEvents {
     VscapPowerOffThreshold(f32),
     VinPowerThreshold(f32),
     ShutdownWaitDurationMs(u32),
+    SoloDepletingTimeoutMs(u32),
     WatchdogTimeoutMs(u16),
     LedBrightness(u8),
     VscapCorrectionScale(f32),
     VinCorrectionScale(f32),
     IinCorrectionScale(f32),
+    AutoRestart(bool),
 }
 
 pub type ConfigManagerChannelType =
@@ -191,11 +192,13 @@ struct RuntimeConfig {
     pub vscap_power_off_threshold: f32,
     pub vin_power_threshold: f32,
     pub shutdown_wait_duration_ms: u32,
+    pub solo_depleting_timeout_ms: u32,
     pub watchdog_timeout_ms: u16,
     pub led_brightness: u8,
     pub vin_correction_scale: f32,
     pub vscap_correction_scale: f32,
     pub iin_correction_scale: f32,
+    pub auto_restart: bool,
 }
 
 impl RuntimeConfig {
@@ -204,22 +207,26 @@ impl RuntimeConfig {
         vscap_power_off_threshold: f32,
         vin_power_threshold: f32,
         shutdown_wait_duration_ms: u32,
+        solo_depleting_timeout_ms: u32,
         watchdog_timeout_ms: u16,
         led_brightness: u8,
         vin_correction_scale: f32,
         vscap_correction_scale: f32,
         iin_correction_scale: f32,
+        auto_restart: bool,
     ) -> Self {
         RuntimeConfig {
             vscap_power_on_threshold,
             vscap_power_off_threshold,
             vin_power_threshold,
             shutdown_wait_duration_ms,
+            solo_depleting_timeout_ms,
             watchdog_timeout_ms,
             led_brightness,
             vin_correction_scale,
             vscap_correction_scale,
             iin_correction_scale,
+            auto_restart,
         }
     }
 }
@@ -230,11 +237,13 @@ static RUNTIME_CONFIG: Mutex<CriticalSectionRawMutex, RuntimeConfig> =
         DEFAULT_VSCAP_POWER_OFF_THRESHOLD,
         DEFAULT_VIN_POWER_THRESHOLD,
         DEFAULT_SHUTDOWN_WAIT_DURATION_MS,
+        DEFAULT_SOLO_BLACKOUT_TIMEOUT_MS,
         HOST_WATCHDOG_DEFAULT_TIMEOUT_MS,
         DEFAULT_LED_BRIGHTNESS,
         DEFAULT_VIN_CORRECTION_SCALE,
         DEFAULT_VSCAP_CORRECTION_SCALE,
         DEFAULT_IIN_CORRECTION_SCALE,
+        DEFAULT_AUTO_RESTART,
     ));
 
 pub async fn get_vscap_power_on_threshold() -> f32 {
@@ -254,6 +263,10 @@ pub async fn get_vin_power_threshold() -> f32 {
 pub async fn get_shutdown_wait_duration_ms() -> u32 {
     let config = RUNTIME_CONFIG.lock().await;
     config.shutdown_wait_duration_ms
+}
+pub async fn get_solo_depleting_timeout_ms() -> u32 {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.solo_depleting_timeout_ms
 }
 #[allow(dead_code)]
 pub async fn get_watchdog_timeout_ms() -> u16 {
@@ -275,6 +288,10 @@ pub async fn get_vscap_correction_scale() -> f32 {
 pub async fn get_iin_correction_scale() -> f32 {
     let config = RUNTIME_CONFIG.lock().await;
     config.iin_correction_scale
+}
+pub async fn get_auto_restart() -> bool {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.auto_restart
 }
 pub async fn set_vscap_power_on_threshold(value: f32) {
     let mut config = RUNTIME_CONFIG.lock().await;
@@ -304,6 +321,13 @@ pub async fn set_shutdown_wait_duration_ms(value: u32) {
     config.shutdown_wait_duration_ms = value;
     CONFIG_MANAGER_EVENT_CHANNEL
         .send(ConfigManagerEvents::ShutdownWaitDurationMs(value))
+        .await;
+}
+pub async fn set_solo_depleting_timeout_ms(value: u32) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.solo_depleting_timeout_ms = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::SoloDepletingTimeoutMs(value))
         .await;
 }
 #[allow(dead_code)]
@@ -340,6 +364,13 @@ pub async fn set_iin_correction_scale(value: f32) {
     config.iin_correction_scale = value;
     CONFIG_MANAGER_EVENT_CHANNEL
         .send(ConfigManagerEvents::IinCorrectionScale(value))
+        .await;
+}
+pub async fn set_auto_restart(value: bool) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.auto_restart = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::AutoRestart(value))
         .await;
 }
 
@@ -386,6 +417,15 @@ pub async fn init_config_manager(
             "Received shutdown wait duration: {}",
             shutdown_wait_duration_ms
         );
+        let solo_depleting_timeout_ms = config_manager
+            .get::<u32>(SOLO_BLACKOUT_TIMEOUT_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_SOLO_BLACKOUT_TIMEOUT_MS);
+        debug!(
+            "Received solo depleting timeout: {}",
+            solo_depleting_timeout_ms
+        );
         let watchdog_timeout_ms = config_manager
             .get::<u16>(HOST_WATCHDOG_TIMEOUT_CONFIG_KEY)
             .await
@@ -398,14 +438,22 @@ pub async fn init_config_manager(
             .unwrap_or(None)
             .unwrap_or(DEFAULT_LED_BRIGHTNESS);
         debug!("Received led brightness: {}", led_brightness);
+        let auto_restart = config_manager
+            .get::<bool>(AUTO_RESTART_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_AUTO_RESTART);
+        debug!("Received auto restart: {}", auto_restart);
 
         let mut runtime_config = RUNTIME_CONFIG.lock().await;
         runtime_config.vscap_power_on_threshold = vscap_power_on_threshold;
         runtime_config.vscap_power_off_threshold = vscap_power_off_threshold;
         runtime_config.vin_power_threshold = vin_power_threshold;
         runtime_config.shutdown_wait_duration_ms = shutdown_wait_duration_ms;
+        runtime_config.solo_depleting_timeout_ms = solo_depleting_timeout_ms;
         runtime_config.watchdog_timeout_ms = watchdog_timeout_ms;
         runtime_config.led_brightness = led_brightness;
+        runtime_config.auto_restart = auto_restart;
     }
     info!("Runtime configuration updated");
     config_manager_mutex
@@ -455,6 +503,12 @@ pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
                     .await
                     .unwrap();
             }
+            ConfigManagerEvents::SoloDepletingTimeoutMs(value) => {
+                config_manager
+                    .set(SOLO_BLACKOUT_TIMEOUT_CONFIG_KEY, &value)
+                    .await
+                    .unwrap();
+            }
             ConfigManagerEvents::WatchdogTimeoutMs(value) => {
                 config_manager
                     .set(HOST_WATCHDOG_TIMEOUT_CONFIG_KEY, &value)
@@ -482,6 +536,12 @@ pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
             ConfigManagerEvents::IinCorrectionScale(value) => {
                 config_manager
                     .set(IIN_CORRECTION_SCALE_CONFIG_KEY, &value)
+                    .await
+                    .unwrap();
+            }
+            ConfigManagerEvents::AutoRestart(value) => {
+                config_manager
+                    .set(AUTO_RESTART_CONFIG_KEY, &value)
                     .await
                     .unwrap();
             }

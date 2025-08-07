@@ -5,23 +5,17 @@ extern crate alloc;
 
 use config::FLASH_SIZE;
 use embassy_rp::flash::Async;
-use embassy_rp::multicore::Stack;
 use embassy_rp::watchdog::Watchdog;
 
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex, once_lock::OnceLock};
 use embassy_time::Duration;
 use embedded_alloc::LlffHeap as Heap;
-use static_cell::StaticCell;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 const HEAP_SIZE: usize = 65536; // 64kB
-static mut CORE1_STACK: Stack<8192> = Stack::new();
-static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
-static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 use defmt::{error, info};
-use embassy_executor::Executor;
 use embassy_executor::Spawner;
 
 use {defmt_rtt as _, panic_probe as _};
@@ -122,9 +116,9 @@ async fn main(spawner: Spawner) {
         .spawn(tasks::led_blinker::led_blinker_task(r.rgb_led))
         .unwrap();
 
-    //spawner
-    //    .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
-    //    .unwrap();
+    spawner
+        .spawn(tasks::i2c_peripheral::i2c_peripheral_access_task(r.i2cm))
+        .unwrap();
 
     spawner
         .spawn(tasks::watchdog_feeder::watchdog_feeder_task())

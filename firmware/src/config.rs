@@ -17,7 +17,9 @@ pub const DEFAULT_VIN_CORRECTION_SCALE: f32 = 1.015; // Default correction scale
 pub const VIN_CORRECTION_SCALE_CONFIG_KEY: u16 = 0x1008; // Key for VIN correction scale in the config
 
 pub const IIN_MAX_VALUE: f32 = 3.3; // V; Maximum voltage for Iin
-pub const DEFAULT_IIN_CORRECTION_SCALE: f32 = 1.0; // Default correction scale for Iin
+// Default correction scale for Iin. The default value is experimentally determined to correct
+// scaling error present in the 0.4.0 hardware.
+pub const DEFAULT_IIN_CORRECTION_SCALE: f32 = 0.8115330908816603;
 pub const IIN_CORRECTION_SCALE_CONFIG_KEY: u16 = 0x1009;
 
 // Time to wait for device to shut down gracefully.
@@ -26,8 +28,8 @@ pub const DEFAULT_SHUTDOWN_WAIT_DURATION_MS: u32 = 60_000; // ms
 pub const SHUTDOWN_WAIT_DURATION_CONFIG_KEY: u16 = 0x1005;
 
 // Time to wait for the device to start shutting down once the power is cut.
-pub const DEFAULT_DEPLETING_TIMEOUT_MS: u32 = 5_000; // ms
-pub const DEPLETING_TIMEOUT_CONFIG_KEY: u16 = 0x1007;
+pub const DEFAULT_SOLO_BLACKOUT_TIMEOUT_MS: u32 = 5_000; // ms
+pub const SOLO_BLACKOUT_TIMEOUT_CONFIG_KEY: u16 = 0x1007;
 
 // how long to stay in off state until restarting
 pub const OFF_STATE_DURATION_MS: u32 = 5000; // ms
@@ -45,8 +47,11 @@ pub const FLASH_SIZE: usize = 4 * 1024 * 1024;
 pub const LED_BRIGHTNESS_CONFIG_KEY: u16 = 0x1001;
 pub const DEFAULT_LED_BRIGHTNESS: u8 = 0x30; // Default brightness value
 
-pub const MIN_TEMPERATURE_VALUE: f32 = 274.15 - 40.0; // Minimum temperature value
-pub const MAX_TEMPERATURE_VALUE: f32 = 274.15 + 100.0; // Maximum temperature value
+pub const AUTO_RESTART_CONFIG_KEY: u16 = 0x100b;
+pub const DEFAULT_AUTO_RESTART: bool = true; // Default: auto restart enabled
+
+pub const MIN_TEMPERATURE_VALUE: f32 = 273.15 - 40.0; // Minimum temperature value
+pub const MAX_TEMPERATURE_VALUE: f32 = 273.15 + 100.0; // Maximum temperature value
 
 pub const MAX_FLASH_WRITE_QUEUE_DEPTH: usize = 4; // Adjust based on available RAM
 pub const FLASH_ERASE_BLOCK_SIZE: usize = 4096;
@@ -54,7 +59,7 @@ pub const FLASH_WRITE_BLOCK_SIZE: usize = 4096;
 
 pub const FIRMWARE_MARK_BOOTED_DELAY_MS: u32 = 30_000; // Delay before marking firmware as booted
 
-pub const FW_VERSION_STR: &str = "3.0.0";
+pub const FW_VERSION_STR: &str = "3.1.0";
 
 // Parse version strings into byte arrays
 // The version format is [major, minor, patch, alpha], where alpha is 0xff

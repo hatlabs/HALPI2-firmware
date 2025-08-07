@@ -10,13 +10,15 @@ use crate::tasks::config_manager::{
     get_iin_correction_scale, set_iin_correction_scale,
     set_vscap_power_on_threshold, get_vscap_power_on_threshold,
     set_vscap_power_off_threshold, get_vscap_power_off_threshold,
+    get_auto_restart, set_auto_restart,
+    get_solo_depleting_timeout_ms, set_solo_depleting_timeout_ms,
 };
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
 };
 use crate::tasks::gpio_input::INPUTS;
 use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
-use crate::tasks::state_machine::{HalpiStates, STATE_MACHINE_EVENT_CHANNEL, StateMachineEvents};
+use crate::tasks::state_machine::{get_state_machine_state, state_as_u8, StateMachineEvents, STATE_MACHINE_EVENT_CHANNEL};
 use crc::{CRC_32_ISO_HDLC, Crc};
 use defmt::{debug, error, info};
 use embassy_executor::task;
@@ -42,10 +44,15 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Read  0x16: Query watchdog elapsed (always returns 0x00)
 // - Read  0x17: Query LED brightness setting (1 byte)
 // - Write 0x17 [NN]: Set LED brightness to NN
+// - Read  0x18: Query auto restart setting (1 byte, 0=disabled, 1=enabled)
+// - Write 0x18 [NN]: Set auto restart to NN (0=disabled, 1=enabled)
+// - Read  0x19: Query solo depleting timeout (4 bytes, milliseconds, big-endian)
+// - Write 0x19 [NN NN NN NN]: Set solo depleting timeout to NNNNNNNN ms (u32, big-endian)
 // - Read  0x20: Query DC IN voltage (2 bytes, scaled u16)
 // - Read  0x21: Query supercap voltage (2 bytes, scaled u16)
 // - Read  0x22: Query DC IN current (2 bytes, scaled u16)
 // - Read  0x23: Query MCU temperature (2 bytes, scaled u16)
+// - Read  0x24: Query PCB temperature (2 bytes, scaled u16)
 // - Write 0x30: [ANY]: Initiate shutdown
 // - Write 0x31: [ANY]: Initiate sleep shutdown
 // - Read  0x50: Query VIN correction scale (4 bytes, f32)
@@ -163,7 +170,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
             },
             Ok(i2c_slave::Command::Write(len)) => {
                 if len < 2 {
-                    error!("Write command too short");
+                    error!("Write command too short: {=[u8]:02x}", &buf[..len]);
                     continue;
                 }
 
@@ -232,18 +239,34 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         info!("Setting LED brightness to {}", brightness);
                         set_led_brightness(brightness).await;
                     }
+                    // Set auto restart
+                    0x18 => {
+                        let auto_restart = buf[1] != 0;
+                        info!("Setting auto restart to {}", auto_restart);
+                        set_auto_restart(auto_restart).await;
+                    }
+                    // Set solo depleting timeout
+                    0x19 => {
+                        if buf.len() < 5 {
+                            info!("Invalid solo depleting timeout data length");
+                        } else {
+                            let timeout_ms = u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]);
+                            info!("Setting solo depleting timeout to {} ms", timeout_ms);
+                            set_solo_depleting_timeout_ms(timeout_ms).await;
+                        }
+                    }
                     // Initiate shutdown
                     0x30 => {
                         info!("Initiating shutdown");
                         STATE_MACHINE_EVENT_CHANNEL
-                            .send(StateMachineEvents::Off)
+                            .send(StateMachineEvents::Shutdown)
                             .await;
                     }
-                    // Initiate sleep shutdown
+                    // Initiate standby shutdown
                     0x31 => {
-                        info!("Initiating sleep shutdown");
+                        info!("Initiating standby shutdown");
                         STATE_MACHINE_EVENT_CHANNEL
-                            .send(StateMachineEvents::SleepShutdown)
+                            .send(StateMachineEvents::StandbyShutdown)
                             .await;
                     }
                     // Start DFU process
@@ -414,9 +437,8 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     }
                     // Query state machine state
                     0x15 => {
-                        // TODO: Implement state machine state query
-                        // For now, return a placeholder value
-                        let state_value: u8 = 0x01; // Placeholder
+                        let state = get_state_machine_state().await;
+                        let state_value = state_as_u8(&state);
                         respond(&mut device, &[state_value]).await
                     }
                     // Query watchdog elapsed time (always returns 0x00)
@@ -425,6 +447,17 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x17 => {
                         let brightness = get_led_brightness().await;
                         respond(&mut device, &[brightness]).await
+                    }
+                    // Query auto restart setting
+                    0x18 => {
+                        let auto_restart = get_auto_restart().await;
+                        respond(&mut device, &[auto_restart as u8]).await
+                    }
+                    // Query solo depleting timeout
+                    0x19 => {
+                        let timeout_ms = get_solo_depleting_timeout_ms().await;
+                        let bytes = timeout_ms.to_be_bytes();
+                        respond(&mut device, &bytes).await
                     }
                     // Query DC IN voltage
                     0x20 => {
@@ -450,6 +483,15 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     // Query MCU temperature
                     0x23 => {
                         let temp = inputs.mcu_temp;
+                        let temp_bytes = ((65535.0 * (temp - MIN_TEMPERATURE_VALUE)
+                            / (MAX_TEMPERATURE_VALUE - MIN_TEMPERATURE_VALUE))
+                            as u16)
+                            .to_be_bytes();
+                        respond(&mut device, &temp_bytes).await
+                    }
+                    // Query PCB temperature
+                    0x24 => {
+                        let temp = inputs.pcb_temp;
                         let temp_bytes = ((65535.0 * (temp - MIN_TEMPERATURE_VALUE)
                             / (MAX_TEMPERATURE_VALUE - MIN_TEMPERATURE_VALUE))
                             as u16)
