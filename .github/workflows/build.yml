@@ -140,6 +140,12 @@ jobs:
 
     - name: Build Debian package using existing debian/ directory
       run: |
+        # Set up environment for debian/install substitution
+        export FIRMWARE_VERSION=$(cat firmware/VERSION)
+        
+        # Generate debian/install from template
+        envsubst < debian/install.in > debian/install
+        
         # Build the package using your existing debian/ setup
         dpkg-buildpackage -us -uc -b
 
