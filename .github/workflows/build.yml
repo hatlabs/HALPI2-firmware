@@ -61,6 +61,8 @@ jobs:
     - name: Build firmware
       run: |
         cargo build --release
+        # Create .elf copies for tools that expect the extension
+        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf
         ls -la target/thumbv6m-none-eabi/release/
 
     - name: Determine version
