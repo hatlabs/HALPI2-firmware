@@ -205,6 +205,8 @@ pub fn state_as_str(state: &State) -> &'static str {
 }
 
 pub fn state_as_u8(state: &State) -> u8 {
+    // Note: the state numbering is part of the I2C API. Any new states
+    // must be added with a unique number.
     match state {
         State::PowerOff {} => 0,
         State::OffCharging {} => 1,
