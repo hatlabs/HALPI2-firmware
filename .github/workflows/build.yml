@@ -41,8 +41,14 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc-arm-none-eabi dpkg-dev libudev1 libudev-dev
 
-        # Install elf2uf2-rs for UF2 conversion
-        cargo install elf2uf2-rs
+        # Install picotool for UF2 conversion (official Raspberry Pi tool)
+        sudo apt-get install -y cmake pkg-config libusb-1.0-0-dev
+        git clone https://github.com/raspberrypi/picotool.git
+        cd picotool
+        mkdir build && cd build
+        cmake ..
+        make -j$(nproc)
+        sudo make install
 
 
     - name: Build bootloader
@@ -79,8 +85,8 @@ jobs:
             base=$(basename "$elf" .elf)
             echo "Converting $base..."
 
-            # Convert to UF2 (for bootsel mode flashing)
-            elf2uf2-rs "$elf" "converted/${base}.uf2"
+            # Convert to UF2 (for bootsel mode flashing) using picotool
+            picotool uf2 convert "$elf" "converted/${base}.uf2"
 
             # Convert to BIN (for some programming tools)
             arm-none-eabi-objcopy -O binary "$elf" "converted/${base}.bin"
