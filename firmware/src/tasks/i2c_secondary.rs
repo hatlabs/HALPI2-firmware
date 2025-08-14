@@ -5,20 +5,20 @@ use crate::config::{
 };
 use crate::config_resources::I2CSecondaryResources;
 use crate::tasks::config_manager::{
-    get_vin_correction_scale, set_vin_correction_scale,
-    get_vscap_correction_scale, set_vscap_correction_scale,
-    get_iin_correction_scale, set_iin_correction_scale,
-    set_vscap_power_on_threshold, get_vscap_power_on_threshold,
-    set_vscap_power_off_threshold, get_vscap_power_off_threshold,
-    get_auto_restart, set_auto_restart,
-    get_solo_depleting_timeout_ms, set_solo_depleting_timeout_ms,
+    get_auto_restart, get_iin_correction_scale, get_solo_depleting_timeout_ms,
+    get_vin_correction_scale, get_vscap_correction_scale, get_vscap_power_off_threshold,
+    get_vscap_power_on_threshold, set_auto_restart, set_iin_correction_scale,
+    set_solo_depleting_timeout_ms, set_vin_correction_scale, set_vscap_correction_scale,
+    set_vscap_power_off_threshold, set_vscap_power_on_threshold,
 };
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
 };
 use crate::tasks::gpio_input::INPUTS;
 use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
-use crate::tasks::state_machine::{get_state_machine_state, state_as_u8, StateMachineEvents, STATE_MACHINE_EVENT_CHANNEL};
+use crate::tasks::state_machine::{
+    STATE_MACHINE_EVENT_CHANNEL, StateMachineEvents, get_state_machine_state, state_as_u8,
+};
 use crc::{CRC_32_ISO_HDLC, Crc};
 use defmt::{debug, error, info};
 use embassy_executor::task;
@@ -36,10 +36,10 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Read  0x12: Query watchdog timeout (2 bytes, ms)
 // - Write 0x12 [NN NN]: Set watchdog timeout to NNNN ms (u16, big-endian)
 // - Write 0x12 0x00 0x00: Disable watchdog
-// - Read  0x13: Query power-on supercap threshold voltage (2 bytes, centivolts)
-// - Write 0x13 [NN NN]: Set power-on supercap threshold voltage to 0.01*NNNN V (u16, big-endian)
-// - Read  0x14: Query power-off supercap threshold voltage (2 bytes, centivolts)
-// - Write 0x14 [NN NN]: Set power-off supercap threshold voltage to 0.01*NNNN V (u16, big-endian)
+// - Read  0x13: Query power-on supercap threshold voltage (2 bytes, scaled to 00..VSCAP_MAX_VALUE)
+// - Write 0x13 [NN NN]: Set power-on supercap threshold voltage to NNNN/0xFFFF*VSCAP_MAX_VALUE V (u16, big-endian)
+// - Read  0x14: Query power-off supercap threshold voltage (2 bytes, scaled to 00..VSCAP_MAX_VALUE))
+// - Write 0x14 [NN NN]: Set power-off supercap threshold voltage to NNNN/0xFFFF*VSCAP_MAX_VALUE V (u16, big-endian)
 // - Read  0x15: Query state machine state (1 byte, placeholder)
 // - Read  0x16: Query watchdog elapsed (always returns 0x00)
 // - Read  0x17: Query LED brightness setting (1 byte)
@@ -81,8 +81,6 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 //   The block size is 4096, and the last block may be smaller. If the status query indicates that the write queue is full,
 //   the sender should wait before retrying. After all blocks are sent, a CommitDFU command (0x44) is sent to finalize the update.
 //   If the update needs to be aborted, an AbortDFU command (0x45) can be sent at any time.
-
-const I2C_ADDR: u8 = 0x6d;
 
 const LEGACY_FW_VERSION: u8 = 0xff;
 const LEGACY_HW_VERSION: u8 = 0x00;
@@ -215,8 +213,8 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             // Need exactly 3 bytes for the threshold value
                             error!("Invalid power-on threshold command length");
                         } else {
-                            let cthreshold = u16::from_be_bytes([buf[1], buf[2]]);
-                            let threshold: f32 = cthreshold as f32 / 100.0; // Convert to millivolts (0.01*NN V)
+                            let scaled_threshold = u16::from_be_bytes([buf[1], buf[2]]);
+                            let threshold: f32 = (scaled_threshold as f32 / 65535.0) * VSCAP_MAX_VALUE;
                             info!("Setting power-on threshold to {} V", threshold);
                             set_vscap_power_on_threshold(threshold).await;
                         }
@@ -227,8 +225,8 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             // Need exactly 3 bytes for the threshold value
                             error!("Invalid power-off threshold command length");
                         } else {
-                            let cthreshold = u16::from_be_bytes([buf[1], buf[2]]);
-                            let threshold: f32 = cthreshold as f32 / 100.0; // Convert to millivolts (0.01*NN V)
+                            let scaled_threshold = u16::from_be_bytes([buf[1], buf[2]]);
+                            let threshold: f32 = (scaled_threshold as f32 / 65535.0) * VSCAP_MAX_VALUE;
                             info!("Setting power-off threshold to {} V", threshold);
                             set_vscap_power_off_threshold(threshold).await;
                         }
@@ -422,18 +420,18 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     // Query power-on threshold voltage
                     0x13 => {
                         let threshold = get_vscap_power_on_threshold().await;
-                        let threshold_centi = (100.0 * threshold) as u16;
-                        let threshold_bytes = threshold_centi.to_be_bytes();
+                        let scaled_threshold = ((threshold / VSCAP_MAX_VALUE) * 65535.0) as u16;
+                        let threshold_bytes = scaled_threshold.to_be_bytes();
                         respond(&mut device, &threshold_bytes).await
                     }
                     // Query power-off threshold voltage
                     0x14 => {
                         let threshold = get_vscap_power_off_threshold().await;
                         debug!("power off threshold: {}", threshold);
-                        let threshold_centi = (100.0 * threshold) as u16;
-                        debug!("power off threshold centi: {}", threshold_centi);
-                        let msb_bytes = threshold_centi.to_be_bytes();
-                        respond(&mut device, &msb_bytes).await
+                        let scaled_threshold = ((threshold / VSCAP_MAX_VALUE) * 65535.0) as u16;
+                        debug!("power off threshold scaled: {}", scaled_threshold);
+                        let threshold_bytes = scaled_threshold.to_be_bytes();
+                        respond(&mut device, &threshold_bytes).await
                     }
                     // Query state machine state
                     0x15 => {
