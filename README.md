@@ -207,8 +207,9 @@ rustup target add thumbv6m-none-eabi
 # Flashing and debugging
 cargo install probe-rs --features cli
 
-# UF2 conversion for bootsel mode
-cargo install elf2uf2-rs
+# UF2 conversion for bootsel mode (requires picotool)
+# On macOS: brew install picotool
+# On Ubuntu/Debian: build from source (see GitHub workflow for instructions)
 ```
 
 ### Build Commands

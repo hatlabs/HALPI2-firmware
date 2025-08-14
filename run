@@ -15,6 +15,9 @@ function cargo-clean {
   # Clean the cargo build directory.
   # This is useful to remove all compiled artifacts and start fresh.
   cargo clean $@
+  # Remove any .elf copies that might be left behind
+  rm -f target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf
+  rm -f target/thumbv6m-none-eabi/debug/halpi2-rs-firmware.elf
 }
 
 function clean {
@@ -25,6 +28,13 @@ function clean {
 function build {
   # Build the project.
   cargo build $@
+  # Create .elf copy for tools that expect the extension
+  if [ -f target/thumbv6m-none-eabi/release/halpi2-rs-firmware ]; then
+    cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf
+  fi
+  if [ -f target/thumbv6m-none-eabi/debug/halpi2-rs-firmware ]; then
+    cp target/thumbv6m-none-eabi/debug/halpi2-rs-firmware target/thumbv6m-none-eabi/debug/halpi2-rs-firmware.elf
+  fi
 }
 
 function get-version {
@@ -47,7 +57,7 @@ function build-uf2 {
   # Get version from Cargo.toml
   VERSION=$(get-version)
   mkdir -p firmware/artifacts
-  elf2uf2-rs target/thumbv6m-none-eabi/release/halpi2-rs-firmware firmware/artifacts/halpi2-rs-firmware_${VERSION}.uf2
+  picotool uf2 convert target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf firmware/artifacts/halpi2-rs-firmware_${VERSION}.uf2
 }
 
 
@@ -66,7 +76,7 @@ function flash {
 }
 
 function monitor {
-  probe-rs attach --chip RP2040 target/thumbv6m-none-eabi/debug/halpi2-rs-firmware $@
+  probe-rs attach --chip RP2040 target/thumbv6m-none-eabi/debug/halpi2-rs-firmware.elf $@
 }
 
 function attach {
@@ -103,7 +113,7 @@ function copy-to-tester {
   VERSION=$(get-version)
   BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
   cp target/thumbv6m-none-eabi/release/bootloader ../HALPI2-tests/tests/200_controller/files/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
-  cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware ../HALPI2-tests/tests/200_controller/files/halpi2-rs-firmware_${VERSION}.elf
+  cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf ../HALPI2-tests/tests/200_controller/files/halpi2-rs-firmware_${VERSION}.elf
 }
 
 function build-debian {
@@ -134,7 +144,7 @@ function convert-artifacts {
 
   # Copy original ELF files
   cp target/thumbv6m-none-eabi/release/bootloader artifacts/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
-  cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.elf
+  cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.elf
 
   # Convert each ELF to UF2 and BIN
   for elf in artifacts/*.elf; do
@@ -142,8 +152,8 @@ function convert-artifacts {
       base=$(basename "$elf" .elf)
       echo "Converting $base..."
 
-      # Convert to UF2 (for bootsel mode flashing)
-      elf2uf2-rs "$elf" "artifacts/${base}.uf2"
+      # Convert to UF2 (for bootsel mode flashing) using picotool
+      picotool uf2 convert "$elf" "artifacts/${base}.uf2"
 
       # Convert to BIN (for some programming tools)
       cargo objcopy --release -- -O binary artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.bin
