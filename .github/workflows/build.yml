@@ -41,14 +41,16 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc-arm-none-eabi dpkg-dev libudev1 libudev-dev
 
-        # Install picotool for UF2 conversion (official Raspberry Pi tool)
-        sudo apt-get install -y cmake pkg-config libusb-1.0-0-dev
-        git clone https://github.com/raspberrypi/picotool.git
-        cd picotool
-        mkdir build && cd build
-        cmake ..
-        make -j$(nproc)
-        sudo make install
+        # Install picotool pre-built binary (much faster than building from source)
+        # Install libusb-1.0 dependency first
+        sudo apt-get install -y libusb-1.0-0
+        wget -q "https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.2.0-1/picotool-2.2.0-a4-x86_64-lin.tar.gz"
+        tar -xzf "picotool-2.2.0-a4-x86_64-lin.tar.gz"
+        sudo cp picotool/picotool /usr/local/bin/
+        sudo chmod +x /usr/local/bin/picotool
+        
+        # Verify installation
+        picotool version
 
 
     - name: Build bootloader
