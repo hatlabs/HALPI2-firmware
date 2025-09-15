@@ -8,31 +8,57 @@ HALPI2 is a Raspberry Pi Compute Module 5 based boat computer with an RP2040 mic
 
 ## Development Commands
 
-Use the `./run` script for all development tasks:
+Use the `./run` script for all development tasks. Commands are organized by functional area:
 
-### Building
-- `./run build` - Build the project (debug)
-- `./run build --release` - Build release version
-- `./run build-binary` - Build release and create `.bin` file
-- `./run build-uf2` - Build release and create `.uf2` file
-- `./run build-bootloader` - Build the bootloader
-- `./run build-all` - Build everything including Debian package
+### Core Development
+- `./run build [--release]` - Build firmware (debug by default)
+- `./run build:bootloader [--release]` - Build bootloader
+- `./run clean` - Clean all build artifacts
+- `./run check` - Run cargo check and clippy
 
-### Flashing and Debugging
-- `./run upload` or `./run flash` - Flash firmware to RP2040
-- `./run flash-bootloader` - Flash bootloader only
-- `./run flash-all` - Flash both bootloader and firmware
-- `./run monitor` or `./run attach` - Attach debugger/monitor
-- `./run flash-and-monitor` - Flash then monitor
+### Hardware Interaction
+- `./run flash [firmware|bootloader|all]` - Flash to device (default: firmware)
+- `./run monitor` - Attach debugger/monitor
+- `./run flash:monitor` - Flash then monitor (common workflow)
 
-### Packaging
-- `./run build-debian` - Build Debian package
-- `./run debtools-build` - Build Debian package using Docker
-- `./run convert-artifacts` - Convert ELF files to UF2/BIN formats
+### Release/Artifacts
+- `./run release:build` - Build all release artifacts (elf, bin, uf2)
+- `./run release:artifacts` - Convert existing ELF to bin/uf2 formats
+- `./run release:version` - Get current firmware version
 
-### Utilities
-- `./run clean` - Clean build artifacts
-- `./run get-version` - Get current firmware version
+### Package Management
+- `./run package:deb` - Build Debian package (native)
+- `./run package:deb:docker` - Build Debian package using Docker
+- `./run package:docker:build` - Build Docker tools image
+
+### Testing/CI
+- `./run test:prepare` - Copy artifacts to test directory
+- `./run ci:build` - Full CI build pipeline
+- `./run ci:check` - CI verification checks
+
+### Development Utilities
+- `./run dev:env` - Show/check development environment
+- `./run dev:clean:all` - Deep clean (cargo + artifacts + packages)
+- `./run dev:version:bump <version>` - Bump to specific version (e.g. 3.2.0)
+- `./run dev:version:dry-run <version>` - Preview version change without applying
+- `./run dev:version:show` - Show current version
+
+### Common Workflows
+```bash
+# Development cycle
+./run build && ./run flash:monitor
+
+# Create release
+./run release:build
+
+# Full CI pipeline
+./run ci:build
+
+# Version management
+./run dev:version:show                    # Check current version
+./run dev:version:dry-run 3.2.0           # Preview version change
+./run dev:version:bump 3.2.0              # Bump to new version
+```
 
 ## Architecture Overview
 
