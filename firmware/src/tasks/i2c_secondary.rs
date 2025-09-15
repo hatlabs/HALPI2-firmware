@@ -9,7 +9,7 @@ use crate::tasks::config_manager::{
     get_vin_correction_scale, get_vscap_correction_scale, get_vscap_power_off_threshold,
     get_vscap_power_on_threshold, set_auto_restart, set_iin_correction_scale,
     set_solo_depleting_timeout_ms, set_vin_correction_scale, set_vscap_correction_scale,
-    set_vscap_power_off_threshold, set_vscap_power_on_threshold,
+    set_vscap_power_off_threshold, set_vscap_power_on_threshold, get_usb_port_state, set_usb_port_state,
 };
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
@@ -48,6 +48,8 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Write 0x18 [NN]: Set auto restart to NN (0=disabled, 1=enabled)
 // - Read  0x19: Query solo depleting timeout (4 bytes, milliseconds, big-endian)
 // - Write 0x19 [NN NN NN NN]: Set solo depleting timeout to NNNNNNNN ms (u32, big-endian)
+// - Read  0x1a: Query USB port enable state (1 byte, bitfield: bit 0=USB0, bit 1=USB1, bit 2=USB2, bit 3=USB3)
+// - Write 0x1a [NN]: Set USB port enable state (bitfield: 0=disabled, 1=enabled)
 // - Read  0x20: Query DC IN voltage (2 bytes, scaled u16)
 // - Read  0x21: Query supercap voltage (2 bytes, scaled u16)
 // - Read  0x22: Query DC IN current (2 bytes, scaled u16)
@@ -253,6 +255,16 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             set_solo_depleting_timeout_ms(timeout_ms).await;
                         }
                     }
+                    // Set USB port enable state
+                    0x1a => {
+                        if len != 2 {
+                            error!("Invalid USB port state command length");
+                            continue;
+                        }
+                        let port_bits = buf[1] & 0x0F; // Mask to lower 4 bits only
+                        info!("Setting USB port state to: 0x{:02x}", port_bits);
+                        set_usb_port_state(port_bits).await;
+                    }
                     // Initiate shutdown
                     0x30 => {
                         info!("Initiating shutdown");
@@ -456,6 +468,11 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         let timeout_ms = get_solo_depleting_timeout_ms().await;
                         let bytes = timeout_ms.to_be_bytes();
                         respond(&mut device, &bytes).await
+                    }
+                    // Query USB port enable state
+                    0x1a => {
+                        let port_bits = get_usb_port_state().await;
+                        respond(&mut device, &[port_bits]).await
                     }
                     // Query DC IN voltage
                     0x20 => {

@@ -84,6 +84,8 @@ assign_resources! {
   state_machine_outputs: StateMachineOutputResources {
     pcie_sleep: PIN_4,
     ven: PIN_19,
+  },
+  config_manager_outputs: ConfigManagerOutputResources {
     dis_usb3: PIN_22,
     dis_usb2: PIN_23,
     dis_usb1: PIN_24,
