@@ -12,8 +12,9 @@
 # Core Development Commands
 
 function build {
-  # Build the firmware project.
-  # Usage: build [--release]
+  #@ Build firmware (debug by default)
+  #@ Usage: build [--release]
+  #@ Category: Core Development
   cargo build $@
   # Create .elf copy for tools that expect the extension
   if [ -f target/thumbv6m-none-eabi/release/halpi2-rs-firmware ]; then
@@ -25,13 +26,15 @@ function build {
 }
 
 function build:bootloader {
-  # Build the bootloader.
-  # Usage: build:bootloader [--release]
+  #@ Build the bootloader
+  #@ Usage: build:bootloader [--release]
+  #@ Category: Core Development
   cargo build -p bootloader --release $@
 }
 
 function clean {
-  # Remove all build artifacts and temporary files.
+  #@ Clean all build artifacts
+  #@ Category: Core Development
   cargo clean $@
   # Remove any .elf copies that might be left behind
   rm -f target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf
@@ -42,7 +45,8 @@ function clean {
 }
 
 function check {
-  # Run cargo check and clippy for code quality.
+  #@ Run cargo check and clippy
+  #@ Category: Core Development
   cargo check --all-targets
   cargo clippy --all-targets -- -D warnings
 }
@@ -51,10 +55,11 @@ function check {
 # Hardware Interaction Commands
 
 function flash {
-  # Flash firmware, bootloader, or both to RP2040.
-  # Usage: flash [firmware|bootloader|all]
+  #@ Flash to device (default: firmware)
+  #@ Usage: flash [firmware|bootloader|all]
+  #@ Category: Hardware Interaction
   local target=${1:-firmware}
-  
+
   case $target in
     firmware)
       cargo flash --chip RP2040
@@ -76,12 +81,14 @@ function flash {
 }
 
 function monitor {
-  # Attach debugger/monitor to running firmware.
+  #@ Attach debugger/monitor
+  #@ Category: Hardware Interaction
   probe-rs attach --chip RP2040 target/thumbv6m-none-eabi/debug/halpi2-rs-firmware.elf $@
 }
 
 function flash:monitor {
-  # Flash firmware and then attach monitor (common development workflow).
+  #@ Flash then monitor (common workflow)
+  #@ Category: Hardware Interaction
   cargo flash --chip RP2040
   monitor $@
 }
@@ -90,61 +97,64 @@ function flash:monitor {
 # Release/Artifact Commands
 
 function release:version {
-  # Get the current firmware version from Cargo.toml.
+  #@ Get current firmware version
+  #@ Category: Release/Artifacts
   VERSION=$(grep -m1 '^version = ' firmware/Cargo.toml | cut -d'"' -f2)
   echo "$VERSION"
 }
 
 function release:build {
-  # Build all release artifacts (ELF, BIN, UF2).
+  #@ Build all release artifacts (elf, bin, uf2)
+  #@ Category: Release/Artifacts
   echo "🏗️ Building release artifacts..."
-  
+
   # Build both bootloader and firmware
   build:bootloader
   build --release
-  
+
   # Get versions
   BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
   FIRMWARE_VERSION=$(release:version)
-  
+
   # Create artifacts directory
   mkdir -p artifacts
-  
+
   # Copy ELF files
   cp target/thumbv6m-none-eabi/release/bootloader artifacts/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
   cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.elf
-  
+
   # Convert to other formats
   release:artifacts
-  
+
   echo "✓ Release artifacts created in artifacts/ directory"
 }
 
 function release:artifacts {
-  # Convert existing ELF files to BIN and UF2 formats.
+  #@ Convert existing ELF to bin/uf2 formats
+  #@ Category: Release/Artifacts
   echo "🔄 Converting artifacts..."
-  
+
   if [ ! -d "artifacts" ]; then
     echo "Error: artifacts directory not found. Run 'release:build' first."
     exit 1
   fi
-  
+
   # Convert each ELF to UF2 and BIN
   for elf in artifacts/*.elf; do
     if [ -f "$elf" ]; then
       base=$(basename "$elf" .elf)
       echo "Converting $base..."
-      
+
       # Convert to UF2 (for bootsel mode flashing) using picotool
       picotool uf2 convert "$elf" "artifacts/${base}.uf2"
-      
+
       # Convert to BIN (for some programming tools)
       if [[ "$base" == *"firmware"* ]]; then
         cargo objcopy --release -- -O binary "artifacts/${base}.bin"
       else
         cargo objcopy -p bootloader --release -- -O binary "artifacts/${base}.bin"
       fi
-      
+
       echo "✓ Created ${base}.uf2 and ${base}.bin"
     fi
   done
@@ -154,24 +164,26 @@ function release:artifacts {
 # Package Management Commands
 
 function package:deb {
-  # Build Debian package using native tools.
+  #@ Build Debian package (native)
+  #@ Category: Package Management
   echo "🏗️ Building Debian package..."
-  
+
   # First, ensure we have release artifacts
   echo "📦 Building release artifacts first..."
   release:build
-  
+
   # Now do the Debian packaging
   package:deb:only
 }
 
 function package:deb:only {
-  # Build Debian package from existing artifacts (internal function).
+  #@ Build Debian package from existing artifacts (internal)
+  #@ Category: Package Management
   echo "📦 Creating Debian package from artifacts..."
-  
+
   # Set up environment
   dev:env
-  
+
   export DEBEMAIL="info@hatlabs.fi"
   export DEBFULLNAME="Hat Labs CI"
   export FIRMWARE_VERSION=$(cat firmware/VERSION)
@@ -186,28 +198,30 @@ function package:deb:only {
       "Automated release $FIRMWARE_VERSION. See GitHub for details."
 
   dpkg-buildpackage -us -uc -b
-  
+
   echo "✅ Debian package built successfully"
 }
 
 function package:deb:docker {
-  # Build Debian package using Docker container.
+  #@ Build Debian package using Docker
+  #@ Category: Package Management
   echo "🐳 Building Debian package using Docker..."
-  
+
   # Build release artifacts locally first (Docker container doesn't have Rust toolchain)
   echo "📦 Building release artifacts first..."
   release:build
-  
+
   # Now use Docker container only for Debian packaging
   echo "🐳 Running Debian packaging in Docker container..."
   export DIR_NAME=$(basename "$PWD")
   docker compose -f docker/docker-compose.debtools.yml run --rm debtools ./run package:deb:only
-  
+
   echo "✅ Docker-based Debian package built successfully"
 }
 
 function package:docker:build {
-  # Build the Docker tools container.
+  #@ Build Docker tools image
+  #@ Category: Package Management
   export DIR_NAME=$(basename "$PWD")
   docker compose -f docker/docker-compose.debtools.yml build debtools "$@"
 }
@@ -216,41 +230,44 @@ function package:docker:build {
 # Testing/CI Commands
 
 function test:prepare {
-  # Copy firmware artifacts to test directory.
+  #@ Copy artifacts to test directory
+  #@ Category: Testing/CI
   build:bootloader
   build --release
-  
+
   VERSION=$(release:version)
   BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
-  
+
   cp target/thumbv6m-none-eabi/release/bootloader ../HALPI2-tests/tests/200_controller/files/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
   cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf ../HALPI2-tests/tests/200_controller/files/halpi2-rs-firmware_${VERSION}.elf
 }
 
 function ci:build {
-  # Full CI build pipeline - builds everything needed for release.
+  #@ Full CI build pipeline
+  #@ Category: Testing/CI
   echo "🚀 Running full CI build pipeline..."
-  
+
   # Clean start
   clean
-  
+
   # Build and check code quality
   check
-  
+
   # Build packages (this will automatically build release artifacts first)
   package:deb:docker
-  
+
   echo "✅ CI build pipeline completed successfully"
 }
 
 function ci:check {
-  # Run CI verification checks without building artifacts.
+  #@ CI verification checks
+  #@ Category: Testing/CI
   echo "🔍 Running CI verification checks..."
-  
+
   check
   build --release
   build:bootloader
-  
+
   echo "✅ CI checks passed"
 }
 
@@ -258,7 +275,8 @@ function ci:check {
 # Development Utilities Commands
 
 function dev:env {
-  # Set up and display development environment.
+  #@ Show/check development environment
+  #@ Category: Development Utilities
   echo "🗝️ Setting environment from .env and .env.defaults"
   # Go through the files and export all variables not already present in
   # the environment. First file has precedence!
@@ -274,65 +292,69 @@ function dev:env {
 }
 
 function dev:clean:all {
-  # Deep clean - remove all build artifacts, packages, and containers.
+  #@ Deep clean (cargo + artifacts + packages)
+  #@ Category: Development Utilities
   echo "🧹 Performing deep clean..."
-  
+
   # Clean cargo artifacts
   clean
-  
+
   # Clean Debian packages
   rm -f ../*.deb ../*.buildinfo ../*.changes
-  
+
   # Clean Docker containers and images
   export DIR_NAME=$(basename "$PWD")
   docker compose -f docker/docker-compose.debtools.yml down --rmi all --volumes || true
-  
+
   echo "✅ Deep clean completed"
 }
 
 function dev:version:bump {
-  # Bump to a specific version using bump2version.
-  # Usage: dev:version:bump <new_version>
+  #@ Bump to specific version (e.g. 3.2.0)
+  #@ Usage: dev:version:bump <version>
+  #@ Category: Development Utilities
   local new_version="${1:-}"
-  
+
   if [ -z "$new_version" ]; then
     echo "Error: Version required. Usage: dev:version:bump <new_version>"
     echo "Current version: $(release:version)"
     echo "Example: ./run dev:version:bump 3.2.0"
     exit 1
   fi
-  
+
   echo "🔖 Bumping version from $(release:version) to $new_version..."
   bump2version --new-version "$new_version" patch
   echo "✓ Version bumped to $(release:version)"
 }
 
 function dev:version:dry-run {
-  # Preview version change without applying.
-  # Usage: dev:version:dry-run <new_version>
+  #@ Preview version change without applying
+  #@ Usage: dev:version:dry-run <version>
+  #@ Category: Development Utilities
   local new_version="${1:-}"
-  
+
   if [ -z "$new_version" ]; then
     echo "Error: Version required. Usage: dev:version:dry-run <new_version>"
     echo "Current version: $(release:version)"
     echo "Example: ./run dev:version:dry-run 3.2.0"
     exit 1
   fi
-  
+
   echo "Current version: $(release:version)"
   echo "Preview of changes for version $new_version:"
   bump2version --new-version "$new_version" patch --dry-run --verbose
 }
 
 function dev:version:show {
-  # Show current version (alias for release:version for consistency).
+  #@ Show current version
+  #@ Category: Development Utilities
   release:version
 }
 
 ################################################################################
 # Project-specific commands end.
 
-# First, set up the environment.
+# Set up the environment.
 # (Check the notes at the end when changing this.)
 
 set -o nounset
@@ -356,49 +378,59 @@ readonly SCRIPT="$PROJECT_ROOT/$(basename "$0")"
 # Meta-commands and utilities follow.
 
 function help {
-  # List all available commands organized by category.
+  #@ Show help for all available commands (auto-generated)
+  #@ Category: Meta
   printf "%s <command> [args]\n\n" "${0}"
-  
-  echo "Core Development Commands:"
-  echo "  build [--release]              Build firmware (debug by default)"
-  echo "  build:bootloader [--release]   Build bootloader"
-  echo "  clean                          Clean all build artifacts"
-  echo "  check                          Run cargo check and clippy"
-  echo ""
-  
-  echo "Hardware Interaction Commands:"
-  echo "  flash [firmware|bootloader|all] Flash to device (default: firmware)"
-  echo "  monitor                        Attach debugger/monitor"
-  echo "  flash:monitor                  Flash then monitor"
-  echo ""
-  
-  echo "Release/Artifact Commands:"
-  echo "  release:build                  Build all release artifacts (elf, bin, uf2)"
-  echo "  release:artifacts              Convert existing ELF to bin/uf2 formats"
-  echo "  release:version                Get current firmware version"
-  echo ""
-  
-  echo "Package Management Commands:"
-  echo "  package:deb                    Build Debian package (native)"
-  echo "  package:deb:docker             Build Debian package using Docker"
-  echo "  package:docker:build           Build Docker tools image"
-  echo ""
-  
-  echo "Testing/CI Commands:"
-  echo "  test:prepare                   Copy artifacts to test directory"
-  echo "  ci:build                       Full CI build pipeline"
-  echo "  ci:check                       CI verification checks"
-  echo ""
-  
-  echo "Development Utilities:"
-  echo "  dev:env                        Show/check development environment"
-  echo "  dev:clean:all                  Deep clean (cargo + artifacts + packages)"
-  echo "  dev:version:bump <version>     Bump to specific version (e.g. 3.2.0)"
-  echo "  dev:version:dry-run <version>  Preview version change without applying"
-  echo "  dev:version:show               Show current version"
-  echo ""
-  
-  printf "Extended help:\n  Each command has comments for general usage\n"
+
+  # Extract help information from function comments
+  # This automatically generates help from #@ comments in functions
+  local -A categories
+  local -A descriptions
+  local -A usages
+
+  # Parse all functions and their help comments
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^function[[:space:]]+([^[:space:]{}]+) ]]; then
+      current_func="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^[[:space:]]*#@[[:space:]]*Category:[[:space:]]*(.+) ]]; then
+      categories["$current_func"]="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^[[:space:]]*#@[[:space:]]*Usage:[[:space:]]*(.+) ]]; then
+      usages["$current_func"]="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^[[:space:]]*#@[[:space:]]*(.+) ]] && [[ -z "${descriptions[$current_func]:-}" ]]; then
+      descriptions["$current_func"]="${BASH_REMATCH[1]}"
+    fi
+  done < "$0"
+
+  # Group functions by category and display
+  local -A category_funcs
+  for func in "${!categories[@]}"; do
+    local cat="${categories[$func]}"
+    category_funcs["$cat"]+="$func "
+  done
+
+  # Display in order of preference
+  local ordered_categories=("Core Development" "Hardware Interaction" "Release/Artifacts" "Package Management" "Testing/CI" "Development Utilities" "Meta")
+
+  for category in "${ordered_categories[@]}"; do
+    if [[ -n "${category_funcs[$category]:-}" ]]; then
+      echo "${category} Commands:"
+      for func in ${category_funcs[$category]}; do
+        local usage="${usages[$func]:-$func}"
+        local desc="${descriptions[$func]:-No description}"
+        printf "  %-30s %s\n" "$usage" "$desc"
+      done
+      echo ""
+    fi
+  done
+
+  # Handle uncategorized functions
+  for func in "${!descriptions[@]}"; do
+    if [[ -z "${categories[$func]:-}" ]]; then
+      local usage="${usages[$func]:-$func}"
+      local desc="${descriptions[$func]}"
+      printf "  %-30s %s\n" "$usage" "$desc"
+    fi
+  done
 }
 
 once_hash_array=()
