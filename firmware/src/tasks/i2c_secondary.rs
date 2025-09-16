@@ -55,6 +55,7 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Read  0x22: Query DC IN current (2 bytes, scaled u16)
 // - Read  0x23: Query MCU temperature (2 bytes, scaled u16)
 // - Read  0x24: Query PCB temperature (2 bytes, scaled u16)
+// - Read  0x25: Query device unique ID (8 bytes)
 // - Write 0x30: [ANY]: Initiate shutdown
 // - Write 0x31: [ANY]: Initiate sleep shutdown
 // - Read  0x50: Query VIN correction scale (4 bytes, f32)
@@ -512,6 +513,13 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             as u16)
                             .to_be_bytes();
                         respond(&mut device, &temp_bytes).await
+                    }
+                    // Query device unique ID
+                    0x25 => {
+                        let mut unique_id = [0u8; 8];
+                        let mut flash = embassy_rp::flash::Flash::<embassy_rp::peripherals::FLASH, embassy_rp::flash::Blocking, { 2 * 1024 * 1024 }>::new_blocking(unsafe { embassy_rp::peripherals::FLASH::steal() });
+                        let _ = flash.blocking_unique_id(&mut unique_id);
+                        respond(&mut device, &unique_id).await
                     }
                     // Read DFU status
                     0x41 => {
