@@ -155,8 +155,22 @@ function release:artifacts {
 
 function package:deb {
   # Build Debian package using native tools.
-  dev:env
   echo "🏗️ Building Debian package..."
+  
+  # First, ensure we have release artifacts
+  echo "📦 Building release artifacts first..."
+  release:build
+  
+  # Now do the Debian packaging
+  package:deb:only
+}
+
+function package:deb:only {
+  # Build Debian package from existing artifacts (internal function).
+  echo "📦 Creating Debian package from artifacts..."
+  
+  # Set up environment
+  dev:env
   
   export DEBEMAIL="info@hatlabs.fi"
   export DEBFULLNAME="Hat Labs CI"
@@ -172,12 +186,24 @@ function package:deb {
       "Automated release $FIRMWARE_VERSION. See GitHub for details."
 
   dpkg-buildpackage -us -uc -b
+  
+  echo "✅ Debian package built successfully"
 }
 
 function package:deb:docker {
   # Build Debian package using Docker container.
+  echo "🐳 Building Debian package using Docker..."
+  
+  # Build release artifacts locally first (Docker container doesn't have Rust toolchain)
+  echo "📦 Building release artifacts first..."
+  release:build
+  
+  # Now use Docker container only for Debian packaging
+  echo "🐳 Running Debian packaging in Docker container..."
   export DIR_NAME=$(basename "$PWD")
-  docker compose -f docker/docker-compose.debtools.yml run --rm debtools ./run package:deb
+  docker compose -f docker/docker-compose.debtools.yml run --rm debtools ./run package:deb:only
+  
+  echo "✅ Docker-based Debian package built successfully"
 }
 
 function package:docker:build {
@@ -211,10 +237,7 @@ function ci:build {
   # Build and check code quality
   check
   
-  # Build all artifacts
-  release:build
-  
-  # Build packages
+  # Build packages (this will automatically build release artifacts first)
   package:deb:docker
   
   echo "✅ CI build pipeline completed successfully"
