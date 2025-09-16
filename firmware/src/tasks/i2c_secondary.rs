@@ -514,7 +514,7 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             .to_be_bytes();
                         respond(&mut device, &temp_bytes).await
                     }
-                    // Query device unique ID
+                    // Query device unique ID (8 bytes from flash memory)
                     0x25 => {
                         let mut unique_id = [0u8; 8];
                         let mut flash = embassy_rp::flash::Flash::<embassy_rp::peripherals::FLASH, embassy_rp::flash::Blocking, { 2 * 1024 * 1024 }>::new_blocking(unsafe { embassy_rp::peripherals::FLASH::steal() });

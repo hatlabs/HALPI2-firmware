@@ -550,9 +550,7 @@ impl HalpiStateMachine {
     #[allow(unused_variables)]
     #[superstate(superstate = "powered_on")]
     async fn blackout(event: &Event, context: &mut Context) -> Outcome<State> {
-        match event {
-            _ => Super,
-        }
+        Super
     }
 
     /// System running on supercapacitor power in solo mode

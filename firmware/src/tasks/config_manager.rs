@@ -295,6 +295,7 @@ struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    #[allow(clippy::too_many_arguments)]
     const fn new(
         vscap_power_on_threshold: f32,
         vscap_power_off_threshold: f32,
