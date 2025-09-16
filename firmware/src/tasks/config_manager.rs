@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::flash_layout::get_bootloader_appdata_range;
 use crate::{MFlashType, config::*};
 use crate::config_resources::ConfigManagerOutputResources;
+use crate::tasks::gpio_input::INPUTS;
 use embassy_rp::gpio::{Level, Output};
 
 // Define a comprehensive error type
@@ -52,6 +53,7 @@ pub enum ConfigManagerEvents {
     VinCorrectionScale(f32),
     IinCorrectionScale(f32),
     AutoRestart(bool),
+    HardwareVersion(u32),
     UsbPortState(u8),
     UsbPowerOn,
     UsbPowerOff,
@@ -292,6 +294,7 @@ struct RuntimeConfig {
     pub vscap_correction_scale: f32,
     pub iin_correction_scale: f32,
     pub auto_restart: bool,
+    pub hardware_version: u32,
 }
 
 impl RuntimeConfig {
@@ -308,6 +311,7 @@ impl RuntimeConfig {
         vscap_correction_scale: f32,
         iin_correction_scale: f32,
         auto_restart: bool,
+        hardware_version: u32,
     ) -> Self {
         RuntimeConfig {
             vscap_power_on_threshold,
@@ -321,6 +325,7 @@ impl RuntimeConfig {
             vscap_correction_scale,
             iin_correction_scale,
             auto_restart,
+            hardware_version,
         }
     }
 }
@@ -338,6 +343,7 @@ static RUNTIME_CONFIG: Mutex<CriticalSectionRawMutex, RuntimeConfig> =
         DEFAULT_VSCAP_CORRECTION_SCALE,
         DEFAULT_IIN_CORRECTION_SCALE,
         DEFAULT_AUTO_RESTART,
+        DEFAULT_HARDWARE_VERSION,
     ));
 
 pub async fn get_vscap_power_on_threshold() -> f32 {
@@ -386,6 +392,10 @@ pub async fn get_iin_correction_scale() -> f32 {
 pub async fn get_auto_restart() -> bool {
     let config = RUNTIME_CONFIG.lock().await;
     config.auto_restart
+}
+pub async fn get_hardware_version() -> u32 {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.hardware_version
 }
 pub async fn set_vscap_power_on_threshold(value: f32) {
     let mut config = RUNTIME_CONFIG.lock().await;
@@ -467,6 +477,13 @@ pub async fn set_auto_restart(value: bool) {
         .send(ConfigManagerEvents::AutoRestart(value))
         .await;
 }
+pub async fn set_hardware_version(value: u32) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.hardware_version = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::HardwareVersion(value))
+        .await;
+}
 
 pub async fn init_config_manager(
     flash: &'static MFlashType<'static>,
@@ -538,6 +555,12 @@ pub async fn init_config_manager(
             .unwrap_or(None)
             .unwrap_or(DEFAULT_AUTO_RESTART);
         debug!("Received auto restart: {}", auto_restart);
+        let hardware_version = config_manager
+            .get::<u32>(HARDWARE_VERSION_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_HARDWARE_VERSION);
+        debug!("Received hardware version: {}", hardware_version);
 
         let mut runtime_config = RUNTIME_CONFIG.lock().await;
         runtime_config.vscap_power_on_threshold = vscap_power_on_threshold;
@@ -548,6 +571,7 @@ pub async fn init_config_manager(
         runtime_config.watchdog_timeout_ms = watchdog_timeout_ms;
         runtime_config.led_brightness = led_brightness;
         runtime_config.auto_restart = auto_restart;
+        runtime_config.hardware_version = hardware_version;
     }
     info!("Runtime configuration updated");
     config_manager_mutex
@@ -645,6 +669,21 @@ pub async fn config_manager_task(flash: &'static MFlashType<'static>, usb_resour
                     .set(AUTO_RESTART_CONFIG_KEY, &value)
                     .await
                     .unwrap();
+            }
+            ConfigManagerEvents::HardwareVersion(value) => {
+                // Only write hardware version to flash if in test mode
+                let inputs = INPUTS.lock().await;
+                if inputs.test_mode {
+                    drop(inputs); // Release the lock before async operation
+                    config_manager
+                        .set(HARDWARE_VERSION_CONFIG_KEY, &value)
+                        .await
+                        .unwrap();
+                    info!("Hardware version {} written to flash (test mode active)", value);
+                } else {
+                    drop(inputs);
+                    info!("Hardware version {} not written to flash (test mode inactive)", value);
+                }
             }
             ConfigManagerEvents::UsbPortState(port_bits) => {
                 let mut usb_outputs_guard = USB_OUTPUTS.lock().await;

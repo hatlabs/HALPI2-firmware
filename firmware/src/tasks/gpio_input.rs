@@ -9,7 +9,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker};
 
 use crate::{
-    config::{VIN_MAX_VALUE, VSCAP_MAX_VALUE}, config_resources::{AnalogInputResources, DigitalInputResources, PowerButtonInputResources, UserButtonInputResources}, tasks::power_button::POWER_BUTTON_EVENT_CHANNEL
+    config::{VIN_MAX_VALUE, VSCAP_MAX_VALUE}, config_resources::{AnalogInputResources, DigitalInputResources, PowerButtonInputResources, TestModeResources, UserButtonInputResources}, tasks::power_button::POWER_BUTTON_EVENT_CHANNEL
 };
 
 use super::power_button::{PowerButtonEvents};
@@ -29,6 +29,7 @@ pub struct Inputs {
     pub pg_5v: bool,
     pub pwr_btn: bool,
     pub user_btn: bool,
+    pub test_mode: bool,
 }
 
 impl Inputs {
@@ -45,6 +46,7 @@ impl Inputs {
             pg_5v: false,
             pwr_btn: true,
             user_btn: true,
+            test_mode: false,
         }
     }
 }
@@ -133,6 +135,23 @@ pub async fn user_button_input_task(r: UserButtonInputResources) {
         let mut inputs = INPUTS.lock().await;
         // Update the user button input state
         inputs.user_btn = button.is_high();
+    }
+}
+
+#[task]
+pub async fn test_mode_input_task(r: TestModeResources) {
+    info!("Starting test mode input task");
+
+    let mut test_pin = Input::new(r.pin, Pull::Up);
+
+    info!("Test mode input task initialized");
+
+    loop {
+        test_pin.wait_for_any_edge().await;
+        let mut inputs = INPUTS.lock().await;
+        // Update the test mode input state
+        inputs.test_mode = test_pin.is_high();
+        info!("Test mode state changed: {}", inputs.test_mode);
     }
 }
 

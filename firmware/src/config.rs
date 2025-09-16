@@ -52,6 +52,9 @@ pub const DEFAULT_LED_BRIGHTNESS: u8 = 0x30; // Default brightness value
 pub const AUTO_RESTART_CONFIG_KEY: u16 = 0x100b;
 pub const DEFAULT_AUTO_RESTART: bool = true; // Default: auto restart enabled
 
+pub const HARDWARE_VERSION_CONFIG_KEY: u16 = 0x100c;
+pub const DEFAULT_HARDWARE_VERSION: u32 = 0xffff; // Default: return 0xFFFF if not found
+
 pub const MIN_TEMPERATURE_VALUE: f32 = 273.15 - 40.0; // Minimum temperature value
 pub const MAX_TEMPERATURE_VALUE: f32 = 273.15 + 100.0; // Maximum temperature value
 

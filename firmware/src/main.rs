@@ -97,6 +97,10 @@ async fn main(spawner: Spawner) {
         .unwrap();
 
     spawner
+        .spawn(tasks::gpio_input::test_mode_input_task(r.test_mode))
+        .unwrap();
+
+    spawner
         .spawn(tasks::power_button::power_button_output_task(
             r.power_button,
         ))

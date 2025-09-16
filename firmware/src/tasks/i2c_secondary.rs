@@ -10,6 +10,7 @@ use crate::tasks::config_manager::{
     get_vscap_power_on_threshold, set_auto_restart, set_iin_correction_scale,
     set_solo_depleting_timeout_ms, set_vin_correction_scale, set_vscap_correction_scale,
     set_vscap_power_off_threshold, set_vscap_power_on_threshold, get_usb_port_state, set_usb_port_state,
+    get_hardware_version, set_hardware_version,
 };
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
@@ -176,6 +177,16 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                 }
 
                 match buf[0] {
+                    // Set hardware version
+                    0x03 => {
+                        if len != 5 {
+                            error!("Invalid hardware version command length");
+                            continue;
+                        }
+                        let hardware_version = u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]);
+                        info!("Setting hardware version to: {}", hardware_version);
+                        set_hardware_version(hardware_version).await;
+                    }
                     // Set Raspi power off/on
                     0x10 => {
                         match buf[1] {
@@ -416,9 +427,9 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x02 => respond(&mut device, &[LEGACY_FW_VERSION]).await,
                     // Query hardware version
                     0x03 => {
-                        // HALPI2 devices don't (yet?) have means for hardware
-                        // versioning. Return all-0xff.
-                        respond(&mut device, &[0xff, 0xff, 0xff, 0xff]).await
+                        let hardware_version = get_hardware_version().await;
+                        let version_bytes = hardware_version.to_be_bytes();
+                        respond(&mut device, &version_bytes).await
                     }
                     // Query firmware version
                     0x04 => respond(&mut device, &FW_VERSION).await,
