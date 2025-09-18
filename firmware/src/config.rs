@@ -1,6 +1,6 @@
 pub const I2C_ADDR: u8 = 0x6d; // I2C address for the device secondary interface
 
-pub const VSCAP_MAX_ALARM: f32 = 10.5; // V; Voltage should never exceed this value
+pub const VSCAP_MAX_ALARM: f32 = 10.6; // V; Voltage should never exceed this value
 pub const VSCAP_MAX_VALUE: f32 = 11.0; // V; Maximum voltage for Vscap
 
 pub const DEFAULT_VSCAP_CORRECTION_SCALE: f32 = 1.059; // Default correction scale for Vscap
@@ -64,7 +64,7 @@ pub const FLASH_WRITE_BLOCK_SIZE: usize = 4096;
 
 pub const FIRMWARE_MARK_BOOTED_DELAY_MS: u32 = 30_000; // Delay before marking firmware as booted
 
-pub const FW_VERSION_STR: &str = "3.1.2";
+pub const FW_VERSION_STR: &str = "3.1.3";
 
 // Parse version strings into byte arrays
 // The version format is [major, minor, patch, alpha], where alpha is 0xff
