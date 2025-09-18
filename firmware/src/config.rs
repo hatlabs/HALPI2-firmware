@@ -1,6 +1,6 @@
 pub const I2C_ADDR: u8 = 0x6d; // I2C address for the device secondary interface
 
-pub const VSCAP_MAX_ALARM: f32 = 10.5; // V; Voltage should never exceed this value
+pub const VSCAP_MAX_ALARM: f32 = 10.6; // V; Voltage should never exceed this value
 pub const VSCAP_MAX_VALUE: f32 = 11.0; // V; Maximum voltage for Vscap
 
 pub const DEFAULT_VSCAP_CORRECTION_SCALE: f32 = 1.059; // Default correction scale for Vscap
