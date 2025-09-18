@@ -1,5 +1,5 @@
 use crate::led_patterns::{get_state_pattern, get_vscap_alarm_pattern};
-use crate::tasks::config_manager::{get_auto_restart, get_shutdown_wait_duration_ms, get_solo_depleting_timeout_ms, get_vscap_power_on_threshold};
+use crate::tasks::config_manager::{get_auto_restart, get_shutdown_wait_duration_ms, get_solo_depleting_timeout_ms, get_vscap_power_on_threshold, usb_power_on, usb_power_off};
 use crate::tasks::led_blinker::{LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents};
 use crate::tasks::power_button::{POWER_BUTTON_EVENT_CHANNEL, PowerButtonEvents};
 use alloc::vec::Vec;
@@ -97,10 +97,6 @@ pub enum Event {
 pub struct Outputs {
     pub ven: Output<'static>,
     pub pcie_sleep: Output<'static>,
-    pub dis_usb3: Output<'static>,
-    pub dis_usb2: Output<'static>,
-    pub dis_usb1: Output<'static>,
-    pub dis_usb0: Output<'static>,
 }
 
 impl Outputs {
@@ -108,29 +104,17 @@ impl Outputs {
         Outputs {
             ven: Output::new(resources.ven, Level::Low),
             pcie_sleep: Output::new(resources.pcie_sleep, Level::Low),
-            dis_usb0: Output::new(resources.dis_usb0, Level::High),
-            dis_usb1: Output::new(resources.dis_usb1, Level::High),
-            dis_usb2: Output::new(resources.dis_usb2, Level::High),
-            dis_usb3: Output::new(resources.dis_usb3, Level::High),
         }
     }
 
     fn power_on(&mut self) {
         self.ven.set_high();
         self.pcie_sleep.set_low();
-        self.dis_usb0.set_low();
-        self.dis_usb1.set_low();
-        self.dis_usb2.set_low();
-        self.dis_usb3.set_low();
     }
 
     fn power_off(&mut self) {
         self.ven.set_low();
         self.pcie_sleep.set_high();
-        self.dis_usb0.set_high();
-        self.dis_usb1.set_high();
-        self.dis_usb2.set_high();
-        self.dis_usb3.set_high();
     }
 }
 
@@ -337,6 +321,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_power_off(&mut self, context: &mut Context) {
         context.outputs.power_off();
+        usb_power_off().await;
     }
 
     /// System is off but supercapacitor is charging from external power
@@ -410,6 +395,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_system_startup(context: &mut Context) {
         context.outputs.power_on();
+        usb_power_on().await;
         context.set_led_pattern(&State::system_startup()).await;
     }
 
@@ -564,9 +550,7 @@ impl HalpiStateMachine {
     #[allow(unused_variables)]
     #[superstate(superstate = "powered_on")]
     async fn blackout(event: &Event, context: &mut Context) -> Outcome<State> {
-        match event {
-            _ => Super,
-        }
+        Super
     }
 
     /// System running on supercapacitor power in solo mode
@@ -788,6 +772,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_powered_down_blackout(context: &mut Context) {
         context.outputs.power_off();
+        usb_power_off().await;
         context.set_led_pattern(&State::powered_down_blackout(Instant::now())).await;
     }
 
@@ -850,6 +835,7 @@ impl HalpiStateMachine {
     #[action]
     async fn enter_powered_down_manual(context: &mut Context) {
         context.outputs.power_off();
+        usb_power_off().await;
         context.set_led_pattern(&State::powered_down_manual(Instant::now())).await;
     }
 

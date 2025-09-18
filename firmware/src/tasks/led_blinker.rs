@@ -210,20 +210,20 @@ impl LEDPatternFragment for SupercapBar {
                 inputs.vscap
             };
 
-            for i in 0..NUM_LEDS {
+            for (i, led) in leds.iter_mut().enumerate().take(NUM_LEDS) {
                 let low = 5.0 + i as f32;
                 let high = 6.0 + i as f32;
                 if vscap >= high {
-                    leds[i] = color;
+                    *led = color;
                 } else if vscap > low {
                     let frac = (vscap - low).clamp(0.0, 1.0);
-                    leds[i] = RGB8 {
+                    *led = RGB8 {
                         r: (color.r as f32 * frac) as u8,
                         g: (color.g as f32 * frac) as u8,
                         b: (color.b as f32 * frac) as u8,
                     };
                 } else {
-                    leds[i] = RGB8::default();
+                    *led = RGB8::default();
                 }
             }
         })

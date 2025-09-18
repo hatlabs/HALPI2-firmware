@@ -9,7 +9,8 @@ use crate::tasks::config_manager::{
     get_vin_correction_scale, get_vscap_correction_scale, get_vscap_power_off_threshold,
     get_vscap_power_on_threshold, set_auto_restart, set_iin_correction_scale,
     set_solo_depleting_timeout_ms, set_vin_correction_scale, set_vscap_correction_scale,
-    set_vscap_power_off_threshold, set_vscap_power_on_threshold,
+    set_vscap_power_off_threshold, set_vscap_power_on_threshold, get_usb_port_state, set_usb_port_state,
+    get_hardware_version, set_hardware_version,
 };
 use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
@@ -48,11 +49,14 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Write 0x18 [NN]: Set auto restart to NN (0=disabled, 1=enabled)
 // - Read  0x19: Query solo depleting timeout (4 bytes, milliseconds, big-endian)
 // - Write 0x19 [NN NN NN NN]: Set solo depleting timeout to NNNNNNNN ms (u32, big-endian)
+// - Read  0x1a: Query USB port enable state (1 byte, bitfield: bit 0=USB0, bit 1=USB1, bit 2=USB2, bit 3=USB3)
+// - Write 0x1a [NN]: Set USB port enable state (bitfield: 0=disabled, 1=enabled)
 // - Read  0x20: Query DC IN voltage (2 bytes, scaled u16)
 // - Read  0x21: Query supercap voltage (2 bytes, scaled u16)
 // - Read  0x22: Query DC IN current (2 bytes, scaled u16)
 // - Read  0x23: Query MCU temperature (2 bytes, scaled u16)
 // - Read  0x24: Query PCB temperature (2 bytes, scaled u16)
+// - Read  0x25: Query device unique ID (8 bytes)
 // - Write 0x30: [ANY]: Initiate shutdown
 // - Write 0x31: [ANY]: Initiate sleep shutdown
 // - Read  0x50: Query VIN correction scale (4 bytes, f32)
@@ -173,6 +177,16 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                 }
 
                 match buf[0] {
+                    // Set hardware version
+                    0x03 => {
+                        if len != 5 {
+                            error!("Invalid hardware version command length");
+                            continue;
+                        }
+                        let hardware_version = u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]);
+                        info!("Setting hardware version to: {}", hardware_version);
+                        set_hardware_version(hardware_version).await;
+                    }
                     // Set Raspi power off/on
                     0x10 => {
                         match buf[1] {
@@ -252,6 +266,16 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             info!("Setting solo depleting timeout to {} ms", timeout_ms);
                             set_solo_depleting_timeout_ms(timeout_ms).await;
                         }
+                    }
+                    // Set USB port enable state
+                    0x1a => {
+                        if len != 2 {
+                            error!("Invalid USB port state command length");
+                            continue;
+                        }
+                        let port_bits = buf[1] & 0x0F; // Mask to lower 4 bits only
+                        info!("Setting USB port state to: 0x{:02x}", port_bits);
+                        set_usb_port_state(port_bits).await;
                     }
                     // Initiate shutdown
                     0x30 => {
@@ -403,9 +427,9 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                     0x02 => respond(&mut device, &[LEGACY_FW_VERSION]).await,
                     // Query hardware version
                     0x03 => {
-                        // HALPI2 devices don't (yet?) have means for hardware
-                        // versioning. Return all-0xff.
-                        respond(&mut device, &[0xff, 0xff, 0xff, 0xff]).await
+                        let hardware_version = get_hardware_version().await;
+                        let version_bytes = hardware_version.to_be_bytes();
+                        respond(&mut device, &version_bytes).await
                     }
                     // Query firmware version
                     0x04 => respond(&mut device, &FW_VERSION).await,
@@ -457,6 +481,11 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         let bytes = timeout_ms.to_be_bytes();
                         respond(&mut device, &bytes).await
                     }
+                    // Query USB port enable state
+                    0x1a => {
+                        let port_bits = get_usb_port_state().await;
+                        respond(&mut device, &[port_bits]).await
+                    }
                     // Query DC IN voltage
                     0x20 => {
                         let voltage = inputs.vin;
@@ -495,6 +524,13 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                             as u16)
                             .to_be_bytes();
                         respond(&mut device, &temp_bytes).await
+                    }
+                    // Query device unique ID (8 bytes from flash memory)
+                    0x25 => {
+                        let mut unique_id = [0u8; 8];
+                        let mut flash = embassy_rp::flash::Flash::<embassy_rp::peripherals::FLASH, embassy_rp::flash::Blocking, { 2 * 1024 * 1024 }>::new_blocking(unsafe { embassy_rp::peripherals::FLASH::steal() });
+                        let _ = flash.blocking_unique_id(&mut unique_id);
+                        respond(&mut device, &unique_id).await
                     }
                     // Read DFU status
                     0x41 => {

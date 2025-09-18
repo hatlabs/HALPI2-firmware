@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::flash_layout::get_bootloader_appdata_range;
 use crate::{MFlashType, config::*};
+use crate::config_resources::ConfigManagerOutputResources;
+use crate::tasks::gpio_input::INPUTS;
+use embassy_rp::gpio::{Level, Output};
 
 // Define a comprehensive error type
 #[derive(Debug)]
@@ -50,11 +53,103 @@ pub enum ConfigManagerEvents {
     VinCorrectionScale(f32),
     IinCorrectionScale(f32),
     AutoRestart(bool),
+    HardwareVersion(u32),
+    UsbPortState(u8),
+    UsbPowerOn,
+    UsbPowerOff,
 }
 
 pub type ConfigManagerChannelType =
     channel::Channel<CriticalSectionRawMutex, ConfigManagerEvents, 8>;
 pub static CONFIG_MANAGER_EVENT_CHANNEL: ConfigManagerChannelType = channel::Channel::new();
+
+/// USB port GPIO outputs controlled by config manager
+pub struct UsbOutputs {
+    pub dis_usb0: Output<'static>,
+    pub dis_usb1: Output<'static>,
+    pub dis_usb2: Output<'static>,
+    pub dis_usb3: Output<'static>,
+}
+
+impl UsbOutputs {
+    pub fn new(resources: ConfigManagerOutputResources) -> Self {
+        UsbOutputs {
+            dis_usb0: Output::new(resources.dis_usb0, Level::Low), // Start enabled (low = enabled)
+            dis_usb1: Output::new(resources.dis_usb1, Level::Low),
+            dis_usb2: Output::new(resources.dis_usb2, Level::Low),
+            dis_usb3: Output::new(resources.dis_usb3, Level::Low),
+        }
+    }
+
+    /// Set USB port states from bitfield (0=disabled, 1=enabled)
+    /// High GPIO = disabled, Low GPIO = enabled
+    pub fn set_port_state(&mut self, port_bits: u8) {
+        if (port_bits & 0x01) != 0 { self.dis_usb0.set_low(); } else { self.dis_usb0.set_high(); }
+        if (port_bits & 0x02) != 0 { self.dis_usb1.set_low(); } else { self.dis_usb1.set_high(); }
+        if (port_bits & 0x04) != 0 { self.dis_usb2.set_low(); } else { self.dis_usb2.set_high(); }
+        if (port_bits & 0x08) != 0 { self.dis_usb3.set_low(); } else { self.dis_usb3.set_high(); }
+    }
+
+    /// Get current USB port states as bitfield by reading GPIO levels
+    pub fn get_port_state(&self) -> u8 {
+        let mut state = 0u8;
+        if self.dis_usb0.is_set_low() { state |= 0x01; }
+        if self.dis_usb1.is_set_low() { state |= 0x02; }
+        if self.dis_usb2.is_set_low() { state |= 0x04; }
+        if self.dis_usb3.is_set_low() { state |= 0x08; }
+        state
+    }
+
+    /// Enable all USB ports (set all dis_usb signals low)
+    pub fn enable_all(&mut self) {
+        self.dis_usb0.set_low();
+        self.dis_usb1.set_low();
+        self.dis_usb2.set_low();
+        self.dis_usb3.set_low();
+    }
+
+    /// Disable all USB ports (set all dis_usb signals high)
+    pub fn disable_all(&mut self) {
+        self.dis_usb0.set_high();
+        self.dis_usb1.set_high();
+        self.dis_usb2.set_high();
+        self.dis_usb3.set_high();
+    }
+}
+
+// Global USB outputs accessible from other modules
+static USB_OUTPUTS: Mutex<CriticalSectionRawMutex, Option<UsbOutputs>> = Mutex::new(None);
+
+/// Get current USB port state by reading GPIO levels
+pub async fn get_usb_port_state() -> u8 {
+    let usb_outputs = USB_OUTPUTS.lock().await;
+    if let Some(ref outputs) = *usb_outputs {
+        outputs.get_port_state()
+    } else {
+        0x00 // Default to all disabled if not initialized
+    }
+}
+
+/// Set USB port state from external modules
+pub async fn set_usb_port_state(port_bits: u8) {
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::UsbPortState(port_bits))
+        .await;
+}
+
+/// Send USB power on event (called by state machine)
+pub async fn usb_power_on() {
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::UsbPowerOn)
+        .await;
+}
+
+/// Send USB power off event (called by state machine)
+pub async fn usb_power_off() {
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::UsbPowerOff)
+        .await;
+}
 
 // Configuration manager using sequential-storage
 pub struct ConfigManager {
@@ -199,9 +294,11 @@ struct RuntimeConfig {
     pub vscap_correction_scale: f32,
     pub iin_correction_scale: f32,
     pub auto_restart: bool,
+    pub hardware_version: u32,
 }
 
 impl RuntimeConfig {
+    #[allow(clippy::too_many_arguments)]
     const fn new(
         vscap_power_on_threshold: f32,
         vscap_power_off_threshold: f32,
@@ -214,6 +311,7 @@ impl RuntimeConfig {
         vscap_correction_scale: f32,
         iin_correction_scale: f32,
         auto_restart: bool,
+        hardware_version: u32,
     ) -> Self {
         RuntimeConfig {
             vscap_power_on_threshold,
@@ -227,6 +325,7 @@ impl RuntimeConfig {
             vscap_correction_scale,
             iin_correction_scale,
             auto_restart,
+            hardware_version,
         }
     }
 }
@@ -244,6 +343,7 @@ static RUNTIME_CONFIG: Mutex<CriticalSectionRawMutex, RuntimeConfig> =
         DEFAULT_VSCAP_CORRECTION_SCALE,
         DEFAULT_IIN_CORRECTION_SCALE,
         DEFAULT_AUTO_RESTART,
+        DEFAULT_HARDWARE_VERSION,
     ));
 
 pub async fn get_vscap_power_on_threshold() -> f32 {
@@ -292,6 +392,10 @@ pub async fn get_iin_correction_scale() -> f32 {
 pub async fn get_auto_restart() -> bool {
     let config = RUNTIME_CONFIG.lock().await;
     config.auto_restart
+}
+pub async fn get_hardware_version() -> u32 {
+    let config = RUNTIME_CONFIG.lock().await;
+    config.hardware_version
 }
 pub async fn set_vscap_power_on_threshold(value: f32) {
     let mut config = RUNTIME_CONFIG.lock().await;
@@ -373,6 +477,13 @@ pub async fn set_auto_restart(value: bool) {
         .send(ConfigManagerEvents::AutoRestart(value))
         .await;
 }
+pub async fn set_hardware_version(value: u32) {
+    let mut config = RUNTIME_CONFIG.lock().await;
+    config.hardware_version = value;
+    CONFIG_MANAGER_EVENT_CHANNEL
+        .send(ConfigManagerEvents::HardwareVersion(value))
+        .await;
+}
 
 pub async fn init_config_manager(
     flash: &'static MFlashType<'static>,
@@ -444,6 +555,12 @@ pub async fn init_config_manager(
             .unwrap_or(None)
             .unwrap_or(DEFAULT_AUTO_RESTART);
         debug!("Received auto restart: {}", auto_restart);
+        let hardware_version = config_manager
+            .get::<u32>(HARDWARE_VERSION_CONFIG_KEY)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(DEFAULT_HARDWARE_VERSION);
+        debug!("Received hardware version: {}", hardware_version);
 
         let mut runtime_config = RUNTIME_CONFIG.lock().await;
         runtime_config.vscap_power_on_threshold = vscap_power_on_threshold;
@@ -454,16 +571,24 @@ pub async fn init_config_manager(
         runtime_config.watchdog_timeout_ms = watchdog_timeout_ms;
         runtime_config.led_brightness = led_brightness;
         runtime_config.auto_restart = auto_restart;
+        runtime_config.hardware_version = hardware_version;
     }
     info!("Runtime configuration updated");
     config_manager_mutex
 }
 
 #[task]
-pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
+pub async fn config_manager_task(flash: &'static MFlashType<'static>, usb_resources: ConfigManagerOutputResources) {
     info!("Initializing config manager task");
 
     let config_manager_mutex = init_config_manager(flash).await;
+
+    // Initialize USB outputs
+    let usb_outputs = UsbOutputs::new(usb_resources);
+    {
+        let mut usb_outputs_guard = USB_OUTPUTS.lock().await;
+        *usb_outputs_guard = Some(usb_outputs);
+    }
 
     // Flash and config manager are initialized in the main function to ensure
     // their availability for other tasks before this task runs.
@@ -544,6 +669,42 @@ pub async fn config_manager_task(flash: &'static MFlashType<'static>) {
                     .set(AUTO_RESTART_CONFIG_KEY, &value)
                     .await
                     .unwrap();
+            }
+            ConfigManagerEvents::HardwareVersion(value) => {
+                // Only write hardware version to flash if in test mode
+                let inputs = INPUTS.lock().await;
+                if inputs.test_mode {
+                    drop(inputs); // Release the lock before async operation
+                    config_manager
+                        .set(HARDWARE_VERSION_CONFIG_KEY, &value)
+                        .await
+                        .unwrap();
+                    info!("Hardware version {} written to flash (test mode active)", value);
+                } else {
+                    drop(inputs);
+                    info!("Hardware version {} not written to flash (test mode inactive)", value);
+                }
+            }
+            ConfigManagerEvents::UsbPortState(port_bits) => {
+                let mut usb_outputs_guard = USB_OUTPUTS.lock().await;
+                if let Some(ref mut usb_outputs) = *usb_outputs_guard {
+                    usb_outputs.set_port_state(port_bits);
+                    info!("USB port state set to: 0x{:02x}", port_bits);
+                }
+            }
+            ConfigManagerEvents::UsbPowerOn => {
+                let mut usb_outputs_guard = USB_OUTPUTS.lock().await;
+                if let Some(ref mut usb_outputs) = *usb_outputs_guard {
+                    usb_outputs.enable_all();
+                    info!("USB power on - all ports enabled");
+                }
+            }
+            ConfigManagerEvents::UsbPowerOff => {
+                let mut usb_outputs_guard = USB_OUTPUTS.lock().await;
+                if let Some(ref mut usb_outputs) = *usb_outputs_guard {
+                    usb_outputs.disable_all();
+                    info!("USB power off - all ports disabled");
+                }
             }
         }
     }

@@ -21,7 +21,7 @@ pub const VIN_CORRECTION_SCALE_CONFIG_KEY: u16 = 0x1008; // Key for VIN correcti
 pub const IIN_MAX_VALUE: f32 = 3.3; // V; Maximum voltage for Iin
 // Default correction scale for Iin. The default value is experimentally determined to correct
 // scaling error present in the 0.4.0 hardware.
-pub const DEFAULT_IIN_CORRECTION_SCALE: f32 = 0.8115330908816603;
+pub const DEFAULT_IIN_CORRECTION_SCALE: f32 = 0.811_533_1;
 pub const IIN_CORRECTION_SCALE_CONFIG_KEY: u16 = 0x1009;
 
 // Time to wait for device to shut down gracefully.
@@ -52,6 +52,9 @@ pub const DEFAULT_LED_BRIGHTNESS: u8 = 0x30; // Default brightness value
 pub const AUTO_RESTART_CONFIG_KEY: u16 = 0x100b;
 pub const DEFAULT_AUTO_RESTART: bool = true; // Default: auto restart enabled
 
+pub const HARDWARE_VERSION_CONFIG_KEY: u16 = 0x100c;
+pub const DEFAULT_HARDWARE_VERSION: u32 = 0xffff; // Default: return 0xFFFF if not found
+
 pub const MIN_TEMPERATURE_VALUE: f32 = 273.15 - 40.0; // Minimum temperature value
 pub const MAX_TEMPERATURE_VALUE: f32 = 273.15 + 100.0; // Maximum temperature value
 
@@ -61,7 +64,7 @@ pub const FLASH_WRITE_BLOCK_SIZE: usize = 4096;
 
 pub const FIRMWARE_MARK_BOOTED_DELAY_MS: u32 = 30_000; // Delay before marking firmware as booted
 
-pub const FW_VERSION_STR: &str = "3.1.1";
+pub const FW_VERSION_STR: &str = "3.1.2-a1";
 
 // Parse version strings into byte arrays
 // The version format is [major, minor, patch, alpha], where alpha is 0xff

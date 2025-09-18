@@ -27,7 +27,7 @@ mod led_patterns;
 mod tasks;
 
 use crate::config_resources::{
-    AnalogInputResources, AssignedResources, DigitalInputResources, I2CPeripheralsResources,
+    AnalogInputResources, AssignedResources, ConfigManagerOutputResources, DigitalInputResources, I2CPeripheralsResources,
     I2CSecondaryResources, PowerButtonInputResources, PowerButtonResources, RGBLEDResources,
     StateMachineOutputResources, TestModeResources, UserButtonInputResources,
 };
@@ -97,6 +97,10 @@ async fn main(spawner: Spawner) {
         .unwrap();
 
     spawner
+        .spawn(tasks::gpio_input::test_mode_input_task(r.test_mode))
+        .unwrap();
+
+    spawner
         .spawn(tasks::power_button::power_button_output_task(
             r.power_button,
         ))
@@ -135,6 +139,6 @@ async fn main(spawner: Spawner) {
         .unwrap();
 
     spawner
-        .spawn(tasks::config_manager::config_manager_task(flash))
+        .spawn(tasks::config_manager::config_manager_task(flash, r.config_manager_outputs))
         .unwrap();
 }
