@@ -61,6 +61,7 @@ config:
   look: handDrawn
 ---
 stateDiagram-v2
+    direction LR
     [*] --> PowerOff
 
     PowerOff --> OffCharging : VIN > threshold
@@ -70,6 +71,7 @@ stateDiagram-v2
     SystemStartup --> PowerOff : VIN ≤ threshold
     SystemStartup --> OperationalSolo : ComputeModuleOn
 
+    %% Operational states (child of powered_on superstate)
     OperationalSolo --> OperationalCoOp : SetWatchdogTimeout(>0)
     OperationalCoOp --> OperationalSolo : SetWatchdogTimeout(0)
 
@@ -77,40 +79,53 @@ stateDiagram-v2
     OperationalCoOp --> BlackoutCoOp : VIN ≤ threshold
     OperationalCoOp --> HostUnresponsive : watchdog timeout
 
+    %% Operational superstate handles these events
     OperationalSolo --> ManualShutdown : Shutdown
     OperationalCoOp --> ManualShutdown : Shutdown
     OperationalSolo --> EnteringStandby : StandbyShutdown
     OperationalCoOp --> EnteringStandby : StandbyShutdown
 
+    %% Blackout states (child of powered_on superstate)
     BlackoutSolo --> OperationalSolo : VIN > threshold
     BlackoutCoOp --> OperationalCoOp : VIN > threshold
 
     BlackoutSolo --> BlackoutShutdown : timeout
     BlackoutCoOp --> BlackoutShutdown : Shutdown
 
+    %% Host watchdog handling
     HostUnresponsive --> OperationalCoOp : WatchdogPing
     HostUnresponsive --> PoweredDownBlackout : timeout
 
+    %% Shutdown sequences
     ManualShutdown --> PoweredDownManual : timeout
     ManualShutdown --> PoweredDownManual : ComputeModuleOff
-
-    EnteringStandby --> Standby : ComputeModuleOff
-    EnteringStandby --> Standby : timeout
-    Standby --> OperationalSolo : ComputeModuleOn
 
     BlackoutShutdown --> PoweredDownBlackout : timeout
     BlackoutShutdown --> PoweredDownBlackout : ComputeModuleOff
 
+    %% Standby handling
+    EnteringStandby --> Standby : ComputeModuleOff
+    EnteringStandby --> Standby : timeout
+    Standby --> OperationalSolo : ComputeModuleOn
+
+    %% Powered_on superstate events (apply to all powered states)
+    %% ComputeModuleOff from any powered state
     OperationalSolo --> PoweredDownManual : ComputeModuleOff
     OperationalCoOp --> PoweredDownManual : ComputeModuleOff
+    BlackoutSolo --> PoweredDownManual : ComputeModuleOff
+    BlackoutCoOp --> PoweredDownManual : ComputeModuleOff
     HostUnresponsive --> PoweredDownManual : ComputeModuleOff
     EnteringStandby --> PoweredDownManual : ComputeModuleOff
 
+    %% Off command from any powered state
     OperationalSolo --> PoweredDownManual : Off
     OperationalCoOp --> PoweredDownManual : Off
+    BlackoutSolo --> PoweredDownManual : Off
+    BlackoutCoOp --> PoweredDownManual : Off
     HostUnresponsive --> PoweredDownManual : Off
     EnteringStandby --> PoweredDownManual : Off
 
+    %% System reset conditions
     PoweredDownBlackout --> [*] : timeout (sys_reset)
     PoweredDownBlackout --> [*] : PowerButtonPress (sys_reset)
 
@@ -190,7 +205,7 @@ responds to I2C requests using bus address 0x6d. The list of commands is given b
 
 For native flashing and debug log viewing, you need a **Raspberry Pi Debug Probe** connected to the debug header next to the RP2040 MCU. The header has three pins labeled:
 - **SWC** (SWCLK)
-- **GND** (Ground) 
+- **GND** (Ground)
 - **SWD** (SWDIO)
 
 Connect the debug probe cables to these pins for probe-rs flashing and defmt log output.
@@ -229,7 +244,7 @@ Use the `./run` script for development tasks:
 
 **With Debug Probe:**
 ```bash
-# Flash via probe-rs 
+# Flash via probe-rs
 ./run flash
 
 # Flash and immediately attach monitor
@@ -251,7 +266,7 @@ Use the `./run` script for development tasks:
 
 The firmware uses `defmt` for structured logging over the debug probe. Log output shows:
 - State machine transitions
-- I2C command processing  
+- I2C command processing
 - Power management events
 - Error conditions
 
@@ -285,7 +300,7 @@ firmware/src/
 
 **State Machine**: Manages power states and transitions based on:
 - VIN power availability (>9V threshold)
-- Supercap voltage (8.0V power-on, 5.5V power-off) 
+- Supercap voltage (8.0V power-on, 5.5V power-off)
 - CM5 status (3.3V rail monitoring)
 - Watchdog timeouts and user commands
 
@@ -304,7 +319,7 @@ firmware/src/
 
 Persistent settings stored in flash:
 - Voltage thresholds and correction scales
-- Watchdog and shutdown timeouts  
+- Watchdog and shutdown timeouts
 - LED brightness and auto-restart behavior
 
 Access via I2C commands or modify defaults in `config.rs`.
@@ -322,8 +337,8 @@ Connect hardware and verify:
    ```bash
    # Read firmware version
    i2cget -y 1 0x6d 0x04 i
-   
-   # Read VIN voltage  
+
+   # Read VIN voltage
    i2cget -y 1 0x6d 0x20 w
    ```
 
