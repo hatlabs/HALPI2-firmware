@@ -95,25 +95,29 @@ pub enum Event {
 
 /// GPIO outputs that are controlled by the state machine task.
 pub struct Outputs {
-    pub ven: Output<'static>,
+    pub en_5v: Output<'static>,
+    pub en_3v3: Output<'static>,
     pub pcie_sleep: Output<'static>,
 }
 
 impl Outputs {
     fn new(resources: StateMachineOutputResources) -> Self {
         Outputs {
-            ven: Output::new(resources.ven, Level::Low),
+            en_5v: Output::new(resources.en_5v, Level::Low),
+            en_3v3: Output::new(resources.en_3v3, Level::High), // Active-low, so High = disabled
             pcie_sleep: Output::new(resources.pcie_sleep, Level::Low),
         }
     }
 
     fn power_on(&mut self) {
-        self.ven.set_high();
+        self.en_5v.set_high();
+        self.en_3v3.set_low(); // Active-low, so Low = enabled
         self.pcie_sleep.set_low();
     }
 
     fn power_off(&mut self) {
-        self.ven.set_low();
+        self.en_5v.set_low();
+        self.en_3v3.set_high(); // Active-low, so High = disabled
         self.pcie_sleep.set_high();
     }
 }
