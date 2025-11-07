@@ -1,14 +1,12 @@
-name: Build Firmware Draft
+name: PR Validation
 
 on:
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 jobs:
-  build-firmware:
+  validate-build:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
 
@@ -35,233 +33,27 @@ jobs:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Install format conversion tools
-      run: |
-        # Install arm-none-eabi-objcopy for BIN conversion
-        sudo apt-get update
-        sudo apt-get install -y gcc-arm-none-eabi dpkg-dev libudev1 libudev-dev
+    - name: Run cargo check
+      run: cargo check --release
 
-        # Install picotool pre-built binary (much faster than building from source)
-        # Install libusb-1.0 dependency first
-        sudo apt-get install -y libusb-1.0-0
-        wget -q "https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.2.0-1/picotool-2.2.0-a4-x86_64-lin.tar.gz"
-        tar -xzf "picotool-2.2.0-a4-x86_64-lin.tar.gz"
-        sudo cp picotool/picotool /usr/local/bin/
-        sudo chmod +x /usr/local/bin/picotool
-        
-        # Verify installation
-        picotool version
-
+    - name: Run cargo clippy
+      run: cargo clippy --release -- -D warnings
 
     - name: Build bootloader
-      run: |
-        cargo build -p bootloader --release
-        ls -la target/thumbv6m-none-eabi/release/
+      run: cargo build -p bootloader --release
 
     - name: Build firmware
+      run: cargo build --release
+
+    - name: Verify build artifacts
       run: |
-        cargo build --release
-        # Create .elf copies for tools that expect the extension
-        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf
         ls -la target/thumbv6m-none-eabi/release/
-
-    - name: Determine version
-      id: version
-      run: |
-        VERSION="${{ github.ref_name }}"
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building version: $VERSION"
-
-    - name: Convert to all formats
-      run: |
-        mkdir -p artifacts converted
-
-        BOOTLOADER_VERSION=$(cargo pkgid -p bootloader | sed 's/.*#//')
-        FIRMWARE_VERSION=$(cat firmware/VERSION)
-
-        # Copy original ELF files
-        cp target/thumbv6m-none-eabi/release/bootloader artifacts/halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf
-        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.elf artifacts/halpi2-rs-firmware_${FIRMWARE_VERSION}.elf
-
-        # Convert each ELF to UF2 and BIN
-        for elf in artifacts/*.elf; do
-          if [ -f "$elf" ]; then
-            base=$(basename "$elf" .elf)
-            echo "Converting $base..."
-
-            # Convert to UF2 (for bootsel mode flashing) using picotool
-            picotool uf2 convert "$elf" "converted/${base}.uf2"
-
-            # Convert to BIN (for some programming tools)
-            arm-none-eabi-objcopy -O binary "$elf" "converted/${base}.bin"
-
-            echo "✓ Created ${base}.uf2 and ${base}.bin"
-          fi
-        done
-
-        # Copy converted files to artifacts
-        cp converted/* artifacts/
-
-        # Create build info
-        cat > artifacts/build-info.txt << EOF
-        Build Date: $(date -u)
-        Git Commit: ${{ github.sha }}
-        Git Tag: ${{ steps.version.outputs.version }}
-        Workflow: ${{ github.run_id }}
-
-        Files included:
-        - halpi2-rs-bootloader_${BOOTLOADER_VERSION}.elf - Bootloader ELF (for debugger)
-        - halpi2-rs-bootloader_${BOOTLOADER_VERSION}.uf2 - Bootloader UF2 (for bootsel mode)
-        - halpi2-rs-bootloader_${BOOTLOADER_VERSION}.bin - Bootloader binary
-        - halpi2-rs-firmware_${FIRMWARE_VERSION}.elf - Firmware ELF (for debugger)
-        - halpi2-rs-firmware_${FIRMWARE_VERSION}.uf2 - Firmware UF2 (for bootsel mode)
-        - halpi2-rs-firmware_${FIRMWARE_VERSION}.bin - Firmware binary
-        EOF
-
-        ls -la artifacts/
-
-    - name: Prepare build environment for Debian packaging
-      run: |
-        # Install Debian packaging tools
-        sudo apt-get update
-        sudo apt-get install -y build-essential debhelper devscripts
-
-        # Create a build directory with the firmware files
-        mkdir -p build-area
-
-    - name: Update debian/changelog with new version
-      run: |
-        # Update changelog with the new version
-        export DEBEMAIL="info@hatlabs.fi"
-        export DEBFULLNAME="Hat Labs CI"
-
-        # Replace dashes with tildes for Debian versioning
-        VERSION=$(cat firmware/VERSION)
-        DEB_VERSION=$(echo "$VERSION" | sed 's/-\([a-zA-Z]\)/~\1/g')
-
-        # Create a new changelog entry
-        dch --newversion "$DEB_VERSION" \
-            --distribution stable \
-            --force-distribution \
-            "Automated release $VERSION. See GitHub for details."
-
-        echo "Updated changelog:"
-        head -n 10 debian/changelog
-
-    - name: Build Debian package using existing debian/ directory
-      run: |
-        # Set up environment for debian/install substitution
-        export FIRMWARE_VERSION=$(cat firmware/VERSION)
-        
-        # Generate debian/install from template
-        envsubst < debian/install.in > debian/install
-        
-        # Build the package using your existing debian/ setup
-        dpkg-buildpackage -us -uc -b
-
-        # Find the generated .deb file
-        deb_file=$(ls ../*.deb | head -1)
-
-        if [ -f "$deb_file" ]; then
-          # Copy to artifacts directory
-          cp "$deb_file" artifacts/
-          echo "✓ Debian package created: $(basename "$deb_file")"
-
-          # Show package info
-          dpkg --info "$deb_file"
-        else
-          echo "❌ Failed to find generated .deb file"
-          ls -la ../
+        if [ ! -f "target/thumbv6m-none-eabi/release/bootloader" ]; then
+          echo "ERROR: Bootloader binary not found!"
           exit 1
         fi
-
-        echo "Final artifacts:"
-        ls -la artifacts/
-
-    - name: Create draft release
-      run: |
-        VERSION=$(cat firmware/VERSION)
-        # Delete existing draft if it exists
-        gh release delete v$VERSION --yes 2>/dev/null || true
-
-        # Create new draft release
-        # NOTE: Any prerelease files with tildes will be renamed to dots.
-        gh release create v$VERSION \
-          --draft \
-          --title "HALPI2 Firmware v$VERSION" \
-          --notes "🔧 **DRAFT - FOR TESTING ONLY**
-
-        This is a draft release with freshly built firmware binaries in all formats.
-
-        **Next steps:**
-        1. Download files below for testing
-        2. Test firmware on real hardware
-        3. Test Debian package installation
-        4. If tests pass, publish this release to trigger APT repo update
-
-        **Build Information:**
-        - Commit: \`${{ github.sha }}\`
-        - Built: $(date -u)
-        - Workflow: [\#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-
-        **Testing Instructions:**
-
-        **Package and Hardware Testing:**
-        1. Download \`halpi2-firmware_*.deb\`
-        2. Install: \`sudo dpkg -i halpi2-firmware_*.deb\`
-        3. Halt the device and let it reboot.
-        4. Verify hardware functionality
-        5. Verify files in \`/usr/share/halpi2-firmware/\`
-
-        **Files:**
-        - \`bootloader.elf/.uf2/.bin\` - Bootloader in all formats
-        - \`firmware.elf/.uf2/.bin\` - Main firmware in all formats
-        - \`halpi2-firmware_*.deb\` - Complete Debian package
-        - \`build-info.txt\` - Build metadata
-
-        ---
-
-        ## 📦 Release Template
-
-        ### What's new in this release
-
-        - _[Add highlights or major changes here]_
-
-        ### Changelog
-
-        - _[List all notable changes, bugfixes, and improvements]_
-
-        ### Upgrade notes
-
-        - _[Mention any special upgrade instructions or compatibility notes]_
-
-        " \
-          artifacts/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Create testing summary
-      run: |
-        VERSION=$(cat firmware/VERSION)
-        echo "## 🎯 Draft Release Created - Ready for Testing!" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🧪 Testing Checklist:" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "#### Hardware Testing:" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Download \`firmware.uf2\`" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Flash to RP2040 device" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Verify basic functionality" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Test bootloader if updated" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "#### Package Testing:" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Download \`.deb\` package" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Install on target system" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Check files in \`/usr/share/halpi2-firmware/\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🚀 Next Steps:" >> $GITHUB_STEP_SUMMARY
-        echo "1. **Go to:** [Draft Release](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
-        echo "2. **Download and test** all artifacts" >> $GITHUB_STEP_SUMMARY
-        echo "3. **If tests pass:** Edit release → Uncheck 'Set as pre-release' → Publish" >> $GITHUB_STEP_SUMMARY
-        echo "4. **If tests fail:** Delete draft and fix issues" >> $GITHUB_STEP_SUMMARY
+        if [ ! -f "target/thumbv6m-none-eabi/release/halpi2-rs-firmware" ]; then
+          echo "ERROR: Firmware binary not found!"
+          exit 1
+        fi
+        echo "✅ Build validation successful"

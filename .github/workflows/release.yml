@@ -1,71 +1,30 @@
-name: Release Firmware
+name: Release Published
 
 on:
   release:
-    types: [published]  # Only triggers when you publish the draft
+    types: [published]
 
 jobs:
-  process-release:
+  notify-apt-repo:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Download release artifacts
+    - name: Extract version from tag
+      id: version
       run: |
-        mkdir -p artifacts
-        gh release download ${{ github.event.release.tag_name }} --dir artifacts/
-        ls -la artifacts/
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Verify Debian package
-      run: |
-        # Find the .deb file
-        deb_file=$(ls artifacts/*.deb | head -1)
-
-        if [ -f "$deb_file" ]; then
-          echo "✓ Found Debian package: $(basename "$deb_file")"
-
-          # Show package info
-          dpkg --info "$deb_file"
-
-          # Show package contents
-          echo ""
-          echo "Package contents:"
-          dpkg --contents "$deb_file"
-        else
-          echo "❌ No Debian package found in artifacts"
-          exit 1
-        fi
+        VERSION="${{ github.event.release.tag_name }}"
+        VERSION="${VERSION#v}"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Extracted version: $VERSION"
 
     - name: Trigger APT repository update
-      uses: peter-evans/repository-dispatch@v2
+      uses: peter-evans/repository-dispatch@v3
       with:
         token: ${{ secrets.APT_REPO_PAT }}
         repository: hatlabs/apt.hatlabs.fi
         event-type: package-updated
         client-payload: |
           {
-            "package": "halpi2-firmware",
-            "version": "${{ github.event.release.tag_name }}",
+            "package": "${{ github.event.repository.name }}",
+            "version": "${{ steps.version.outputs.version }}",
             "repository": "${{ github.repository }}"
           }
-
-    - name: Create release summary
-      run: |
-        echo "## 🚀 Firmware Release Published!" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Version:** ${{ github.event.release.tag_name }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### ✅ Actions Completed:" >> $GITHUB_STEP_SUMMARY
-        echo "- [x] Verified Debian package integrity" >> $GITHUB_STEP_SUMMARY
-        echo "- [x] Triggered APT repository update" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📦 Package Installation:" >> $GITHUB_STEP_SUMMARY
-        echo "The package will be available in the APT repository shortly:" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-        echo "sudo apt update" >> $GITHUB_STEP_SUMMARY
-        echo "sudo apt install halpi2-firmware" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
