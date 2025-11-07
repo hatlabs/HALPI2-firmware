@@ -24,7 +24,7 @@ jobs:
         event-type: package-updated
         client-payload: |
           {
-            "package": "${{ github.event.repository.name }}",
+            "package": "halpi2-firmware",
             "version": "${{ steps.version.outputs.version }}",
             "repository": "${{ github.repository }}"
           }

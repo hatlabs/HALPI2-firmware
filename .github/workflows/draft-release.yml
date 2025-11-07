@@ -317,7 +317,7 @@ jobs:
         echo "- [ ] Check files in \`/usr/share/halpi2-firmware/\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🚀 Next Steps:" >> $GITHUB_STEP_SUMMARY
-        echo "1. **Go to:** [Draft Release](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+        echo "1. **Go to:** [Draft Release](${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
         echo "2. **Download and test** all artifacts" >> $GITHUB_STEP_SUMMARY
         echo "3. **If tests pass:** Edit release → Uncheck 'Set as pre-release' → Publish" >> $GITHUB_STEP_SUMMARY
         echo "4. **If tests fail:** Delete draft and fix issues" >> $GITHUB_STEP_SUMMARY
