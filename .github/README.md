@@ -32,6 +32,11 @@ Triggers when a draft release is published:
 
 Generates polished release notes from git commit history using conventional commit format.
 
+**Requirements:**
+- `git` - For commit history analysis
+- `bash` 4.0+ - For string manipulation features (parameter expansion)
+- `gh` CLI - For release API access (used in workflows only)
+
 **Usage:**
 ```bash
 .github/scripts/generate-release-notes.sh <version> [last_tag] [repository] [template_path]
@@ -120,7 +125,7 @@ LAST_TAG=$(git describe --tags --abbrev=0)
 
 ### Workflow debugging
 
-View workflow runs at: `https://github.com/hatlabs/HALPI2-firmware/actions`
+View workflow runs in the **Actions** tab of your repository.
 
 Common issues:
 - **Draft not created**: Check if published release already exists for version

@@ -264,11 +264,15 @@ jobs:
       if: steps.check_release.outputs.skip == 'false'
       run: |
         VERSION=$(cat firmware/VERSION)
+
+        # Get the release URL dynamically after creation
+        RELEASE_URL=$(gh release view v$VERSION --json url --jq '.url')
+
         echo "## ✅ Draft Release Created: v$VERSION" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 📝 Next Steps" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "1. **Review Release Notes:** [v$VERSION Draft](${{ github.server_url }}/${{ github.repository }}/releases/tag/v$VERSION)" >> $GITHUB_STEP_SUMMARY
+        echo "1. **Review Release Notes:** [v$VERSION Draft]($RELEASE_URL)" >> $GITHUB_STEP_SUMMARY
         echo "2. **Edit the \"What's New\" section** to highlight key changes" >> $GITHUB_STEP_SUMMARY
         echo "3. **Test artifacts** on hardware if needed" >> $GITHUB_STEP_SUMMARY
         echo "4. **Publish the release** when ready (triggers APT repo update)" >> $GITHUB_STEP_SUMMARY
@@ -279,3 +283,5 @@ jobs:
         echo "- Bootloader (ELF, UF2, BIN formats)" >> $GITHUB_STEP_SUMMARY
         echo "- Debian package" >> $GITHUB_STEP_SUMMARY
         echo "- Build metadata" >> $GITHUB_STEP_SUMMARY
+      env:
+        GH_TOKEN: ${{ github.token }}
