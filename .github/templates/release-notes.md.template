@@ -16,8 +16,10 @@ sudo apt install halpi2-firmware
 
 ### Manual Installation
 Download the appropriate file for your use case:
-- `halpi2-rs-firmware_{{VERSION}}.uf2` - For flashing via USB bootloader (most common)
-- `halpi2-rs-firmware_{{VERSION}}.deb` - For installation on HALPI2 systems with APT
-- `halpi2-rs-firmware_{{VERSION}}.elf` - For debugging with probe-rs or similar tools
+- `halpi2-rs-firmware_{{VERSION}}.uf2` - Firmware for USB bootloader flashing (most common)
+- `halpi2-rs-bootloader_*.uf2` - Bootloader for USB bootloader flashing (rarely needed)
+- `halpi2-firmware_*.deb` - Debian package for HALPI2 systems with APT
+- `halpi2-rs-firmware_{{VERSION}}.elf` - Firmware ELF for debugging with probe-rs
+- `build-info.txt` - Build metadata and artifact listing
 
 {{CHANGELOG_LINK}}

@@ -232,8 +232,14 @@ jobs:
         # Get the latest published release tag for changelog
         LAST_TAG=$(gh release list --limit 100 --json tagName,isPrerelease,isDraft --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName' | head -n1)
 
-        # Use the script to generate release notes
+        # Use the script to generate release notes (will fail workflow if script fails)
         bash .github/scripts/generate-release-notes.sh "$VERSION" "$LAST_TAG" "${{ github.repository }}" > release_notes.md
+
+        # Verify the file was created and is not empty
+        if [ ! -s release_notes.md ]; then
+          echo "Error: Failed to generate release notes or file is empty" >&2
+          exit 1
+        fi
 
         echo "Generated release notes:"
         cat release_notes.md
