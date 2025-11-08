@@ -8,7 +8,7 @@
 //| 2      | PWR_BTN_IN  | Input from the physical power button. Active low.              |
 //| 3      | USER_BTN    | Input from the user-defined button. Active low.                |
 //| 4      | PCIESLEEP   | Pull high to put the PCIe device to sleep.                     |
-//| 5      | GPIO05      | Connected to the GPIO header. Not used.                        |
+//| 5      | EN3V3OUT    | Enable 3.3V output. Active low.                                |
 //| 6      | GPIO06      | Connected to the GPIO header. Not used.                        |
 //| 7      | GPIO07      | Connected to the GPIO header. Not used.                        |
 //| 8      | GPIO08      | Connected to the GPIO header. Not used.                        |
@@ -22,7 +22,7 @@
 //| 16     | TEST_MODE   | Input to enable test mode. Pull-high, active low.              |
 //| 17     | GPIO17      | Connected to the test pad. Not used.                           |
 //| 18     | PG_5V       | Power Good input from the 5V buck converter. Active high.      |
-//| 19     | VEN         | Voltage Enable output for the 5V buck converter. Active high.  |
+//| 19     | EN5V        | Enable 5V output (5V buck converter). Active high.             |
 //| 20     | I2Cm_SDA    | I2Cm data line. Controller is primary.                         |
 //| 21     | I2Cm_SCL    | I2Cm clock line. Controller is primary.                        |
 //| 22     | DIS_USB3    | USB3 disable signal. Active high.                              |
@@ -58,7 +58,6 @@ assign_resources! {
   },
   digital_inputs: DigitalInputResources {
     pcie_led: PIN_1,
-    gpio05: PIN_5,
     gpio06: PIN_6,
     gpio07: PIN_7,
     gpio08: PIN_8,
@@ -83,7 +82,8 @@ assign_resources! {
   },
   state_machine_outputs: StateMachineOutputResources {
     pcie_sleep: PIN_4,
-    ven: PIN_19,
+    en_3v3: PIN_5,
+    en_5v: PIN_19,
   },
   config_manager_outputs: ConfigManagerOutputResources {
     dis_usb3: PIN_22,
