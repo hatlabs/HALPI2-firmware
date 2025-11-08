@@ -31,10 +31,10 @@ fi
 
 # Categorize commits by conventional commit type
 # Using git log with --grep to filter by commit message patterns
-FEATURES=$(git log $CHANGELOG_RANGE --pretty=format:"- **%s**" --no-merges --grep="^feat" || true)
-FIXES=$(git log $CHANGELOG_RANGE --pretty=format:"- **%s**" --no-merges --grep="^fix" || true)
-IMPROVEMENTS=$(git log $CHANGELOG_RANGE --pretty=format:"- **%s**" --no-merges --grep="^refactor\|^perf\|^chore" || true)
-DOCS=$(git log $CHANGELOG_RANGE --pretty=format:"- **%s**" --no-merges --grep="^docs" || true)
+FEATURES=$(git log "$CHANGELOG_RANGE" --pretty=format:"- **%s**" --no-merges --grep="^feat" || true)
+FIXES=$(git log "$CHANGELOG_RANGE" --pretty=format:"- **%s**" --no-merges --grep="^fix" || true)
+IMPROVEMENTS=$(git log "$CHANGELOG_RANGE" --pretty=format:"- **%s**" --no-merges --grep="^refactor\|^perf\|^chore" || true)
+DOCS=$(git log "$CHANGELOG_RANGE" --pretty=format:"- **%s**" --no-merges --grep="^docs" || true)
 
 # Count commits in each category (safely handle empty strings)
 FEAT_COUNT=0
