@@ -224,7 +224,7 @@ jobs:
         echo "Final artifacts:"
         ls -la artifacts/
 
-    - name: Create draft release
+    - name: Generate release notes
       if: steps.check_release.outputs.skip == 'false'
       run: |
         VERSION=$(cat firmware/VERSION)
@@ -232,92 +232,44 @@ jobs:
         # Get the latest published release tag for changelog
         LAST_TAG=$(gh release list --limit 100 --json tagName,isPrerelease,isDraft --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName' | head -n1)
 
-        if [ -n "$LAST_TAG" ]; then
-          echo "Generating changelog since $LAST_TAG"
-          CHANGELOG_COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s" --no-merges)
-        else
-          echo "No previous releases found, using recent commits"
-          CHANGELOG_COMMITS=$(git log -10 --pretty=format:"- %s" --no-merges)
-        fi
+        # Use the script to generate release notes
+        .github/scripts/generate-release-notes.sh "$VERSION" "$LAST_TAG" "${{ github.repository }}" > release_notes.md
 
-        # Create new draft release
+        echo "Generated release notes:"
+        cat release_notes.md
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create draft release
+      if: steps.check_release.outputs.skip == 'false'
+      run: |
+        VERSION=$(cat firmware/VERSION)
+
+        # Create new draft release with generated notes
         gh release create v$VERSION \
           --draft \
           --title "HALPI2 Firmware v$VERSION" \
-          --notes "🔧 **DRAFT - FOR TESTING ONLY**
-
-        This is a draft release with freshly built firmware binaries in all formats.
-
-        **Next steps:**
-        1. Download files below for testing
-        2. Test firmware on real hardware
-        3. Test Debian package installation
-        4. If tests pass, publish this release to trigger APT repo update
-
-        **Build Information:**
-        - Commit: \`${{ github.sha }}\`
-        - Built: $(date -u)
-        - Workflow: [\#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-
-        **Testing Instructions:**
-
-        **Package and Hardware Testing:**
-        1. Download \`halpi2-firmware_*.deb\`
-        2. Install: \`sudo dpkg -i halpi2-firmware_*.deb\`
-        3. Halt the device and let it reboot.
-        4. Verify hardware functionality
-        5. Verify files in \`/usr/share/halpi2-firmware/\`
-
-        **Files:**
-        - \`bootloader.elf/.uf2/.bin\` - Bootloader in all formats
-        - \`firmware.elf/.uf2/.bin\` - Main firmware in all formats
-        - \`halpi2-firmware_*.deb\` - Complete Debian package
-        - \`build-info.txt\` - Build metadata
-
-        ---
-
-        ## 📦 Release Template
-
-        ### What's new in this release
-
-        - _[Add highlights or major changes here]_
-
-        ### Changelog
-
-        ${CHANGELOG_COMMITS}
-
-        ### Upgrade notes
-
-        - _[Mention any special upgrade instructions or compatibility notes]_
-
-        " \
+          --notes-file release_notes.md \
           artifacts/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Create testing summary
+    - name: Create workflow summary
       if: steps.check_release.outputs.skip == 'false'
       run: |
         VERSION=$(cat firmware/VERSION)
-        echo "## 🎯 Draft Release Created - Ready for Testing!" >> $GITHUB_STEP_SUMMARY
+        echo "## ✅ Draft Release Created: v$VERSION" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
+        echo "### 📝 Next Steps" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🧪 Testing Checklist:" >> $GITHUB_STEP_SUMMARY
+        echo "1. **Review Release Notes:** [v$VERSION Draft](${{ github.server_url }}/${{ github.repository }}/releases/tag/v$VERSION)" >> $GITHUB_STEP_SUMMARY
+        echo "2. **Edit the \"What's New\" section** to highlight key changes" >> $GITHUB_STEP_SUMMARY
+        echo "3. **Test artifacts** on hardware if needed" >> $GITHUB_STEP_SUMMARY
+        echo "4. **Publish the release** when ready (triggers APT repo update)" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "#### Hardware Testing:" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Download \`firmware.uf2\`" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Flash to RP2040 device" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Verify basic functionality" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Test bootloader if updated" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Included Artifacts" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "#### Package Testing:" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Download \`.deb\` package" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Install on target system" >> $GITHUB_STEP_SUMMARY
-        echo "- [ ] Check files in \`/usr/share/halpi2-firmware/\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🚀 Next Steps:" >> $GITHUB_STEP_SUMMARY
-        echo "1. **Go to:** [Draft Release](${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
-        echo "2. **Download and test** all artifacts" >> $GITHUB_STEP_SUMMARY
-        echo "3. **If tests pass:** Edit release → Uncheck 'Set as pre-release' → Publish" >> $GITHUB_STEP_SUMMARY
-        echo "4. **If tests fail:** Delete draft and fix issues" >> $GITHUB_STEP_SUMMARY
+        echo "- Firmware (ELF, UF2, BIN formats)" >> $GITHUB_STEP_SUMMARY
+        echo "- Bootloader (ELF, UF2, BIN formats)" >> $GITHUB_STEP_SUMMARY
+        echo "- Debian package" >> $GITHUB_STEP_SUMMARY
+        echo "- Build metadata" >> $GITHUB_STEP_SUMMARY

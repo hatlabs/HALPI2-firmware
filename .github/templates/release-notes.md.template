@@ -1,0 +1,23 @@
+## What's New
+
+_Edit this section to highlight the most important changes in this release._
+
+{{FEATURES}}
+{{FIXES}}
+{{IMPROVEMENTS}}
+{{DOCS}}
+## 📦 Installation & Upgrade
+
+### Debian Package
+```bash
+sudo apt update
+sudo apt install halpi2-firmware
+```
+
+### Manual Installation
+Download the appropriate file for your use case:
+- `halpi2-rs-firmware_{{VERSION}}.uf2` - For flashing via USB bootloader (most common)
+- `halpi2-rs-firmware_{{VERSION}}.deb` - For installation on HALPI2 systems with APT
+- `halpi2-rs-firmware_{{VERSION}}.elf` - For debugging with probe-rs or similar tools
+
+{{CHANGELOG_LINK}}
