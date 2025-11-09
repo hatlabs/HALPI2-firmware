@@ -13,9 +13,9 @@ Homepage: https://github.com/hatlabs/HALPI2-firmware-deb
 Package: halpi2-firmware
 Architecture: all
 Depends:
- halpid (>= 4.0.0),
  ${shlibs:Depends},
  ${misc:Depends},
+Breaks: halpid (<< 4.0.0)
 Description: Firmware for the HALPI2 Computer
  This package contains the firmware for the HALPI2 Computer onboard controller.
  The firmware is automatically flashed to the device upon installation.
