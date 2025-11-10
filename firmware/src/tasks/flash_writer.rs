@@ -88,7 +88,7 @@ async fn prepare_update(flash: &MFlashType<'static>) -> Result<(), String> {
             return Err("Failed to get firmware state".into());
         }
     };
-    if !(state == State::Boot || state == State::DfuDetach || state == State::Revert) {
+    if !(state == State::Boot || state == State::DfuDetach || state == State::Revert || state == State::Swap) {
         return Err("Firmware is not in a booted state".into());
     }
 
