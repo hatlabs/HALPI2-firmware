@@ -1,0 +1,89 @@
+name: 'Build Debian Package'
+description: 'Build HALPI2 firmware and create .deb package'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: thumbv6m-none-eabi
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache target directory
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install format conversion tools
+      run: |
+        # Install arm-none-eabi-objcopy for BIN conversion
+        sudo apt-get update
+        sudo apt-get install -y gcc-arm-none-eabi dpkg-dev libudev1 libudev-dev
+
+        # Install picotool pre-built binary
+        sudo apt-get install -y libusb-1.0-0
+        wget -q "https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.2.0-1/picotool-2.2.0-a4-x86_64-lin.tar.gz"
+        tar -xzf "picotool-2.2.0-a4-x86_64-lin.tar.gz"
+        sudo cp picotool/picotool /usr/local/bin/
+        sudo chmod +x /usr/local/bin/picotool
+
+        # Verify installation
+        picotool version
+      shell: bash
+
+    - name: Build firmware binaries
+      run: |
+        cargo build --release
+        cargo build -p bootloader --release
+      shell: bash
+
+    - name: Convert to BIN format
+      run: |
+        arm-none-eabi-objcopy -O binary \
+          target/thumbv6m-none-eabi/release/bootloader \
+          target/thumbv6m-none-eabi/release/bootloader.bin
+
+        arm-none-eabi-objcopy -O binary \
+          target/thumbv6m-none-eabi/release/halpi2-rs-firmware \
+          target/thumbv6m-none-eabi/release/halpi2-rs-firmware.bin
+      shell: bash
+
+    - name: Convert to UF2 format
+      run: |
+        picotool uf2 convert \
+          target/thumbv6m-none-eabi/release/bootloader.bin \
+          target/thumbv6m-none-eabi/release/bootloader.uf2 \
+          --family rp2040
+
+        picotool uf2 convert \
+          target/thumbv6m-none-eabi/release/halpi2-rs-firmware.bin \
+          target/thumbv6m-none-eabi/release/halpi2-rs-firmware.uf2 \
+          --family rp2040
+      shell: bash
+
+    - name: Build Debian package
+      run: dpkg-buildpackage -b -uc -us
+      shell: bash
+
+    - name: Move package to root
+      run: mv ../halpi2-firmware_*.deb ./
+      shell: bash
+
+    - name: List generated packages
+      run: |
+        echo "📦 Generated packages:"
+        ls -lh *.deb
+      shell: bash
