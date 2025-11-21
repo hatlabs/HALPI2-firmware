@@ -708,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "halpi2-rs-firmware"
-version = "3.2.0"
+version = "3.2.1-a1"
 dependencies = [
  "assign-resources",
  "cortex-m",

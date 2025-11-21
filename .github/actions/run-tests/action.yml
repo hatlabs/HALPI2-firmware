@@ -1,49 +1,47 @@
-name: PR Validation
+name: 'Run Tests'
+description: 'Run Rust checks and build validation for HALPI2 firmware'
 
-on:
-  pull_request:
-    branches: [main]
-
-jobs:
-  validate-build:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
+runs:
+  using: 'composite'
+  steps:
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: thumbv6m-none-eabi
 
     - name: Cache cargo registry
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cargo/registry
         key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Cache cargo index
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cargo/git
         key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Cache target directory
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo check
       run: cargo check --release
+      shell: bash
 
     - name: Run cargo clippy
       run: cargo clippy --release -- -D warnings
+      shell: bash
 
     - name: Build bootloader
       run: cargo build -p bootloader --release
+      shell: bash
 
     - name: Build firmware
       run: cargo build --release
+      shell: bash
 
     - name: Verify build artifacts
       run: |
@@ -57,3 +55,4 @@ jobs:
           exit 1
         fi
         echo "✅ Build validation successful"
+      shell: bash

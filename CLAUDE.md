@@ -126,3 +126,19 @@ Commands include power control (0x10), watchdog (0x12), voltage thresholds (0x13
 - Bootloader supports DFU updates over I2C
 - GPIO inputs are debounced and filtered
 - LED patterns provide visual system status feedback
+
+## Version Management
+
+**IMPORTANT**: Never manually edit version numbers in Cargo.toml files. Always use the `./run dev:version:bump` command to update versions.
+
+The version bump script updates:
+- `firmware/Cargo.toml` - Firmware package version
+- `debian/changelog` - Debian package changelog with timestamp
+- Git tags (when creating releases)
+
+Example:
+```bash
+./run dev:version:show                 # Check current version
+./run dev:version:dry-run 3.2.1-a1     # Preview changes
+./run dev:version:bump 3.2.1-a1        # Apply version bump
+```
