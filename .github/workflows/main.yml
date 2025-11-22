@@ -10,6 +10,7 @@ jobs:
     with:
       package-name: halpi2-firmware
       package-description: 'HALPI2 RP2040 firmware package'
+      apt-distro: any
       apt-component: hatlabs
     secrets:
       APT_REPO_PAT: ${{ secrets.APT_REPO_PAT }}
