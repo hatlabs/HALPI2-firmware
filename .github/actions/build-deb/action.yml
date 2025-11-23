@@ -107,9 +107,10 @@ runs:
         echo "🔍 Verifying package contents..."
         DEB_FILE=$(ls halpi2-firmware_*.deb | head -n1)
 
-        # List package contents
+        # List package contents and save for checking
         echo "Package contents:"
-        dpkg-deb -c "$DEB_FILE"
+        CONTENTS=$(dpkg-deb -c "$DEB_FILE")
+        echo "$CONTENTS"
 
         # Verify required firmware files are present
         REQUIRED_FILES=(
@@ -123,7 +124,7 @@ runs:
 
         MISSING=0
         for file in "${REQUIRED_FILES[@]}"; do
-          if dpkg-deb -c "$DEB_FILE" | grep -q "$file"; then
+          if echo "$CONTENTS" | grep -q "$file"; then
             echo "✅ Found: $file"
           else
             echo "❌ MISSING: $file"
