@@ -77,8 +77,13 @@ runs:
     - name: Copy firmware to artifacts directory
       run: |
         mkdir -p artifacts
+        # Copy all firmware formats (UF2, BIN, ELF)
         cp target/thumbv6m-none-eabi/release/bootloader.uf2 artifacts/
+        cp target/thumbv6m-none-eabi/release/bootloader.bin artifacts/
+        cp target/thumbv6m-none-eabi/release/bootloader artifacts/bootloader.elf
         cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.uf2 artifacts/
+        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.bin artifacts/
+        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware artifacts/halpi2-rs-firmware.elf
         echo "Artifacts directory contents:"
         ls -la artifacts/
       shell: bash
@@ -95,4 +100,44 @@ runs:
       run: |
         echo "📦 Generated packages:"
         ls -lh *.deb
+      shell: bash
+
+    - name: Verify package contents
+      run: |
+        echo "🔍 Verifying package contents..."
+        DEB_FILE=$(ls halpi2-firmware_*.deb | head -n1)
+
+        # List package contents
+        echo "Package contents:"
+        dpkg-deb -c "$DEB_FILE"
+
+        # Verify required firmware files are present
+        REQUIRED_FILES=(
+          "halpi2-rs-firmware.bin"
+          "halpi2-rs-firmware.elf"
+          "halpi2-rs-firmware.uf2"
+          "bootloader.bin"
+          "bootloader.elf"
+          "bootloader.uf2"
+        )
+
+        MISSING=0
+        for file in "${REQUIRED_FILES[@]}"; do
+          if dpkg-deb -c "$DEB_FILE" | grep -q "$file"; then
+            echo "✅ Found: $file"
+          else
+            echo "❌ MISSING: $file"
+            MISSING=1
+          fi
+        done
+
+        if [ $MISSING -eq 1 ]; then
+          echo ""
+          echo "ERROR: Package is missing required firmware files!"
+          echo "The postinst script requires .bin files for flashing."
+          exit 1
+        fi
+
+        echo ""
+        echo "✅ Package verification successful - all firmware formats present"
       shell: bash
