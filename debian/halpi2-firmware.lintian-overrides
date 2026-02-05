@@ -1,25 +1,26 @@
 # HALPI2 firmware files are RP2040 embedded binaries, not Linux executables.
 # These lintian warnings are expected and can be safely ignored.
+# Wildcards used to match versioned filenames (e.g., halpi2-rs-firmware_3.2.1.elf)
 
 # Embedded firmware ELF files are statically linked by design
-halpi2-firmware: statically-linked-binary [usr/share/halpi2-firmware/halpi2-rs-firmware.elf]
-halpi2-firmware: statically-linked-binary [usr/share/halpi2-firmware/bootloader.elf]
+halpi2-firmware: statically-linked-binary [usr/share/halpi2-firmware/halpi2-rs-firmware_*.elf]
+halpi2-firmware: statically-linked-binary [usr/share/halpi2-firmware/bootloader_*.elf]
 
 # Embedded firmware ELF files contain debug symbols for debugging/flashing
-halpi2-firmware: unstripped-binary-or-object [usr/share/halpi2-firmware/halpi2-rs-firmware.elf]
-halpi2-firmware: unstripped-binary-or-object [usr/share/halpi2-firmware/bootloader.elf]
+halpi2-firmware: unstripped-binary-or-object [usr/share/halpi2-firmware/halpi2-rs-firmware_*.elf]
+halpi2-firmware: unstripped-binary-or-object [usr/share/halpi2-firmware/bootloader_*.elf]
 
 # Raw binary firmware files are not ELF executables
-halpi2-firmware: executable-not-elf-or-script [usr/share/halpi2-firmware/halpi2-rs-firmware.bin]
-halpi2-firmware: executable-not-elf-or-script [usr/share/halpi2-firmware/bootloader.bin]
+halpi2-firmware: executable-not-elf-or-script [usr/share/halpi2-firmware/halpi2-rs-firmware_*.bin]
+halpi2-firmware: executable-not-elf-or-script [usr/share/halpi2-firmware/bootloader_*.bin]
 
 # Firmware ELF files in /usr/share are architecture-independent (RP2040 target, not host)
-halpi2-firmware: arch-dependent-file-in-usr-share [usr/share/halpi2-firmware/halpi2-rs-firmware.elf]
-halpi2-firmware: arch-dependent-file-in-usr-share [usr/share/halpi2-firmware/bootloader.elf]
+halpi2-firmware: arch-dependent-file-in-usr-share [usr/share/halpi2-firmware/halpi2-rs-firmware_*.elf]
+halpi2-firmware: arch-dependent-file-in-usr-share [usr/share/halpi2-firmware/bootloader_*.elf]
 
 # Architecture: all package intentionally contains RP2040 binaries (cross-compiled firmware)
-halpi2-firmware: arch-independent-package-contains-binary-or-object [usr/share/halpi2-firmware/halpi2-rs-firmware.elf]
-halpi2-firmware: arch-independent-package-contains-binary-or-object [usr/share/halpi2-firmware/bootloader.elf]
+halpi2-firmware: arch-independent-package-contains-binary-or-object [usr/share/halpi2-firmware/halpi2-rs-firmware_*.elf]
+halpi2-firmware: arch-independent-package-contains-binary-or-object [usr/share/halpi2-firmware/bootloader_*.elf]
 
 # Package name contains "firmware" which suggests embedded section, not kernel
 halpi2-firmware: wrong-section-according-to-package-name embedded => kernel
