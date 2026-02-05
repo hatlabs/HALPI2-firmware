@@ -23,3 +23,6 @@ halpi2-firmware: arch-independent-package-contains-binary-or-object [usr/share/h
 
 # Package name contains "firmware" which suggests embedded section, not kernel
 halpi2-firmware: wrong-section-according-to-package-name embedded => kernel
+
+# Not an official Debian package, no ITP bug to close
+halpi2-firmware: initial-upload-closes-no-bugs
