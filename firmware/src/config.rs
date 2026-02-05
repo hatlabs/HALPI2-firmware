@@ -64,7 +64,7 @@ pub const FLASH_WRITE_BLOCK_SIZE: usize = 4096;
 
 pub const FIRMWARE_MARK_BOOTED_DELAY_MS: u32 = 30_000; // Delay before marking firmware as booted
 
-pub const FW_VERSION_STR: &str = "3.2.1-a1";
+pub const FW_VERSION_STR: &str = "3.2.1";
 
 // Parse version strings into byte arrays
 // The version format is [major, minor, patch, alpha], where alpha is 0xff
