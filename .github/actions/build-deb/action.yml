@@ -76,14 +76,18 @@ runs:
 
     - name: Copy firmware to artifacts directory
       run: |
+        # Read versions
+        FW_VERSION=$(cat firmware/VERSION)
+        BL_VERSION=$(grep '^version' bootloader/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
         mkdir -p artifacts
-        # Copy all firmware formats (UF2, BIN, ELF)
-        cp target/thumbv6m-none-eabi/release/bootloader.uf2 artifacts/
-        cp target/thumbv6m-none-eabi/release/bootloader.bin artifacts/
-        cp target/thumbv6m-none-eabi/release/bootloader artifacts/bootloader.elf
-        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.uf2 artifacts/
-        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.bin artifacts/
-        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware artifacts/halpi2-rs-firmware.elf
+        # Copy all firmware formats with version in filename
+        cp target/thumbv6m-none-eabi/release/bootloader.uf2 "artifacts/bootloader_${BL_VERSION}.uf2"
+        cp target/thumbv6m-none-eabi/release/bootloader.bin "artifacts/bootloader_${BL_VERSION}.bin"
+        cp target/thumbv6m-none-eabi/release/bootloader "artifacts/bootloader_${BL_VERSION}.elf"
+        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.uf2 "artifacts/halpi2-rs-firmware_${FW_VERSION}.uf2"
+        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware.bin "artifacts/halpi2-rs-firmware_${FW_VERSION}.bin"
+        cp target/thumbv6m-none-eabi/release/halpi2-rs-firmware "artifacts/halpi2-rs-firmware_${FW_VERSION}.elf"
         echo "Artifacts directory contents:"
         ls -la artifacts/
       shell: bash
@@ -112,22 +116,22 @@ runs:
         CONTENTS=$(dpkg-deb -c "$DEB_FILE")
         echo "$CONTENTS"
 
-        # Verify required firmware files are present
-        REQUIRED_FILES=(
-          "halpi2-rs-firmware.bin"
-          "halpi2-rs-firmware.elf"
-          "halpi2-rs-firmware.uf2"
-          "bootloader.bin"
-          "bootloader.elf"
-          "bootloader.uf2"
+        # Verify required firmware files are present (using patterns for versioned names)
+        REQUIRED_PATTERNS=(
+          "halpi2-rs-firmware_.*.bin"
+          "halpi2-rs-firmware_.*.elf"
+          "halpi2-rs-firmware_.*.uf2"
+          "bootloader_.*.bin"
+          "bootloader_.*.elf"
+          "bootloader_.*.uf2"
         )
 
         MISSING=0
-        for file in "${REQUIRED_FILES[@]}"; do
-          if echo "$CONTENTS" | grep -q "$file"; then
-            echo "✅ Found: $file"
+        for pattern in "${REQUIRED_PATTERNS[@]}"; do
+          if echo "$CONTENTS" | grep -qE "$pattern"; then
+            echo "✅ Found: $pattern"
           else
-            echo "❌ MISSING: $file"
+            echo "❌ MISSING: $pattern"
             MISSING=1
           fi
         done
