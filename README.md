@@ -142,12 +142,14 @@ LEDs indicate the supercap voltage level and the power state of the system.
 The LEDs act as a bar graph, with the first LED indicating a voltage level between
 5.0V and 6.0V, and the last LED indicating a voltage level between 9.0V and 10.0V.
 
-When the system is powered off, the bar is red. When the system is booting but not
-yet communicating with the controller, the bar is yellow. When the system is
-powered on, the bar is green. When the system is shutting down, the bar is purple.
+Before charging begins, only LED 5 is red. While the super-capacitor is charging,
+the bar fills progressively in red. If the CM5 fails to start, a rainbow and
+color cycle pattern is displayed. In solo mode (no daemon), the bar is yellow.
+In co-op mode (daemon active), the bar is green. During a blackout (input power
+lost), the bar is orange (solo) or dark green (co-op). When the system is
+shutting down, the bar is purple.
 
-A depleting state is indicated by an animation scrolling right to left.
-An overvoltage state is indicated by rapid flashing of the first LED.
+A super-capacitor overvoltage condition is indicated by all LEDs flashing red.
 
 
 ## I2C Communication
