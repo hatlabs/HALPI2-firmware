@@ -1,3 +1,30 @@
+//! LED blinker task — drives 5 SK6805 RGB LEDs via WS2812 protocol.
+//!
+//! # Rendering Pipeline
+//!
+//! The LED output is computed every 10ms through a three-layer pipeline:
+//!
+//! 1. **Base pattern** — State-machine-driven pattern (e.g., green SupercapBar in
+//!    OperationalCoOp). Set via `SetPattern` event on every state transition.
+//!    Writes into `self.data: [RGB8; NUM_LEDS]`.
+//!
+//! 2. **Modifiers** — One-shot overlay patterns (e.g., overvoltage alarm blink).
+//!    Added via `AddModifier`, run in sequence, removed when complete. Each
+//!    modifier overwrites `self.data` — later modifiers take priority.
+//!
+//! 3. **Overrides** — External per-LED RGBA blending for system status display
+//!    (ethernet, wifi, disk I/O) via I2C register 0x60. Each LED has independent
+//!    RGBA targets with smooth transitions. Alpha controls blend level:
+//!    - alpha=0: pattern passes through (no override)
+//!    - alpha=255: fully replaced by override color
+//!    - alpha=1-254: linear blend between pattern and override
+//!
+//!    Overrides auto-clear after 5 seconds without updates (safety timeout).
+//!    Cleared on any state transition (SetPattern clears all overrides).
+//!
+//! After all three layers, gamma correction and brightness scaling are applied
+//! before writing to the SK6805 LEDs.
+
 use core::fmt;
 use core::future::Future;
 use core::pin::Pin;
@@ -21,13 +48,110 @@ use smart_leds::{RGB8, brightness, gamma};
 use crate::config_resources::RGBLEDResources;
 use crate::tasks::gpio_input::INPUTS;
 
-const NUM_LEDS: usize = 5;
+pub const NUM_LEDS: usize = 5;
+const OVERRIDE_TIMEOUT_MS: u64 = 5000;
+
+/// Per-LED override state for external LED control
+#[derive(Clone, Copy, Default)]
+struct LedOverride {
+    start_r: u8,
+    start_g: u8,
+    start_b: u8,
+    start_alpha: u8,
+    target_r: u8,
+    target_g: u8,
+    target_b: u8,
+    target_alpha: u8,
+    transition_remaining_ms: u16,
+    transition_total_ms: u16,
+}
+
+
+impl LedOverride {
+    /// Advance transition by one tick (10ms).
+    fn advance(&mut self) {
+        if self.transition_remaining_ms > 0 {
+            self.transition_remaining_ms = self.transition_remaining_ms.saturating_sub(10);
+        }
+    }
+
+    /// Get current interpolated RGBA values.
+    fn current_r(&self) -> u8 {
+        Self::interpolate(self.start_r, self.target_r, self.elapsed(), self.transition_total_ms)
+    }
+    fn current_g(&self) -> u8 {
+        Self::interpolate(self.start_g, self.target_g, self.elapsed(), self.transition_total_ms)
+    }
+    fn current_b(&self) -> u8 {
+        Self::interpolate(self.start_b, self.target_b, self.elapsed(), self.transition_total_ms)
+    }
+    fn current_alpha(&self) -> u8 {
+        Self::interpolate(
+            self.start_alpha,
+            self.target_alpha,
+            self.elapsed(),
+            self.transition_total_ms,
+        )
+    }
+
+    fn elapsed(&self) -> u16 {
+        self.transition_total_ms - self.transition_remaining_ms
+    }
+
+    fn interpolate(start: u8, end: u8, elapsed: u16, total: u16) -> u8 {
+        if total == 0 {
+            return end;
+        }
+        let s = start as i32;
+        let e = end as i32;
+        (s + (e - s) * elapsed as i32 / total as i32).clamp(0, 255) as u8
+    }
+
+    /// Set new target RGBA with transition. Current interpolated values become new start.
+    fn set_target(&mut self, r: u8, g: u8, b: u8, alpha: u8, transition_ms: u16) {
+        // Snapshot current interpolated state as new start
+        self.start_r = self.current_r();
+        self.start_g = self.current_g();
+        self.start_b = self.current_b();
+        self.start_alpha = self.current_alpha();
+
+        self.target_r = r;
+        self.target_g = g;
+        self.target_b = b;
+        self.target_alpha = alpha;
+
+        let steps = transition_ms / 10;
+        if steps == 0 {
+            // Immediate: start = target
+            self.start_r = r;
+            self.start_g = g;
+            self.start_b = b;
+            self.start_alpha = alpha;
+            self.transition_remaining_ms = 0;
+            self.transition_total_ms = 0;
+        } else {
+            self.transition_remaining_ms = transition_ms;
+            self.transition_total_ms = transition_ms;
+        }
+    }
+}
+
+/// Command for a single LED override (matches I2C wire format)
+#[derive(Clone, Copy, Default)]
+pub struct LedOverrideCommand {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub alpha: u8,
+    pub transition_ms: u16,
+}
 
 #[allow(dead_code)]
 pub enum LEDBlinkerEvents {
     SetPattern(LEDPattern),
     SetBrightness(u8),
     AddModifier(LEDPattern),
+    SetOverrides([LedOverrideCommand; NUM_LEDS]),
 }
 
 pub type LEDBlinkerChannelType = channel::Channel<CriticalSectionRawMutex, LEDBlinkerEvents, 8>;
@@ -306,6 +430,8 @@ struct LEDBlinker<'d, P: Instance, const S: usize> {
     pattern: LEDPattern,
     modifiers: ModifierVec,
     brightness: u8,
+    overrides: [LedOverride; NUM_LEDS],
+    last_override_tick: Option<u64>,
 }
 
 impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
@@ -317,11 +443,27 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
             pattern,
             modifiers: Vec::new(),
             brightness,
+            overrides: [LedOverride::default(); NUM_LEDS],
+            last_override_tick: None,
         }
     }
 
     fn set_pattern(&mut self, pattern: LEDPattern) {
         self.pattern = pattern;
+        // Clear all overrides on pattern change (happens on every state transition)
+        self.clear_overrides();
+    }
+
+    fn clear_overrides(&mut self) {
+        self.overrides = [LedOverride::default(); NUM_LEDS];
+        self.last_override_tick = None;
+    }
+
+    fn set_overrides(&mut self, cmds: [LedOverrideCommand; NUM_LEDS]) {
+        for (i, cmd) in cmds.iter().enumerate() {
+            self.overrides[i].set_target(cmd.r, cmd.g, cmd.b, cmd.alpha, cmd.transition_ms);
+        }
+        self.last_override_tick = Some(Instant::now().as_millis());
     }
 
     fn add_modifier(&mut self, modifier: LEDPattern) {
@@ -329,11 +471,12 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
     }
 
     async fn update(&mut self) {
+        // Step 1: Base pattern
         self.data.copy_from_slice(&self.last_colors);
         self.pattern.update(&mut self.data, false).await;
         self.last_colors = self.data;
 
-        // Use retain instead of manual removal to avoid index issues
+        // Step 2: Modifiers
         let mut i = 0;
         while i < self.modifiers.len() {
             if !self.modifiers[i].update(&mut self.data, true).await {
@@ -343,18 +486,58 @@ impl<'d, P: Instance, const S: usize> LEDBlinker<'d, P, S> {
             }
         }
 
-        // Apply brightness
+        // Step 3: Override blending
+        self.apply_overrides();
+
+        // Step 4: Gamma correction and brightness
         let gamma_corrected = gamma(self.data.iter().cloned());
         let brightness_corrected = brightness(gamma_corrected, self.brightness);
         let corrected_data: Vec<RGB8> = brightness_corrected.collect();
 
-        // Write the data back into an RGB8 array
         let mut output_data: [RGB8; NUM_LEDS] = [RGB8::default(); NUM_LEDS];
         for (i, color) in corrected_data.into_iter().enumerate().take(NUM_LEDS) {
             output_data[i] = color;
         }
 
+        // Step 5: Write to WS2812
         self.ws2812.write(&output_data).await;
+    }
+
+    fn apply_overrides(&mut self) {
+        // Check timeout
+        if let Some(last_tick) = self.last_override_tick {
+            if Instant::now().as_millis() - last_tick > OVERRIDE_TIMEOUT_MS {
+                self.clear_overrides();
+                return;
+            }
+        } else {
+            return;
+        }
+
+        for i in 0..NUM_LEDS {
+            self.overrides[i].advance();
+
+            let alpha = self.overrides[i].current_alpha();
+            if alpha == 0 {
+                continue;
+            }
+
+            let ovr_r = self.overrides[i].current_r();
+            let ovr_g = self.overrides[i].current_g();
+            let ovr_b = self.overrides[i].current_b();
+
+            // Alpha-blend override color with pattern color
+            let inv_alpha = 255 - alpha;
+            self.data[i].r =
+                ((self.data[i].r as u16 * inv_alpha as u16 + ovr_r as u16 * alpha as u16) / 255)
+                    as u8;
+            self.data[i].g =
+                ((self.data[i].g as u16 * inv_alpha as u16 + ovr_g as u16 * alpha as u16) / 255)
+                    as u8;
+            self.data[i].b =
+                ((self.data[i].b as u16 * inv_alpha as u16 + ovr_b as u16 * alpha as u16) / 255)
+                    as u8;
+        }
     }
 
     fn set_brightness(&mut self, brightness: u8) {
@@ -426,6 +609,7 @@ pub async fn led_blinker_task(r: RGBLEDResources) {
                     led_blinker.set_brightness(brightness);
                 }
                 LEDBlinkerEvents::AddModifier(modifier) => led_blinker.add_modifier(modifier),
+                LEDBlinkerEvents::SetOverrides(cmds) => led_blinker.set_overrides(cmds),
             }
         }
 

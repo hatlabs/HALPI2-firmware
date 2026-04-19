@@ -16,7 +16,10 @@ use crate::tasks::flash_writer::{
     FLASH_WRITE_REQUEST_CHANNEL, FlashUpdateState, FlashWriteCommand,
 };
 use crate::tasks::gpio_input::INPUTS;
-use crate::tasks::led_blinker::{get_led_brightness, set_led_brightness};
+use crate::tasks::led_blinker::{
+    LED_BLINKER_EVENT_CHANNEL, LEDBlinkerEvents, LedOverrideCommand, NUM_LEDS as LED_NUM_LEDS,
+    get_led_brightness, set_led_brightness,
+};
 use crate::tasks::state_machine::{
     STATE_MACHINE_EVENT_CHANNEL, StateMachineEvents, get_state_machine_state, state_as_u8,
 };
@@ -57,6 +60,9 @@ use embassy_rp::{bind_interrupts, i2c, i2c_slave};
 // - Read  0x23: Query MCU temperature (2 bytes, scaled u16)
 // - Read  0x24: Query PCB temperature (2 bytes, scaled u16)
 // - Read  0x25: Query device unique ID (8 bytes)
+// - Write 0x60 [NUM_LEDS * 6 bytes]: LED override (R,G,B,Alpha,TransitionMs_BE per LED).
+//     Only processed in OperationalCoOp state. Alpha=0 means no override for that LED.
+//     Overrides auto-clear after 5 seconds without updates.
 // - Write 0x30: [ANY]: Initiate shutdown
 // - Write 0x31: [ANY]: Initiate sleep shutdown
 // - Read  0x50: Query VIN correction scale (4 bytes, f32)
@@ -276,6 +282,39 @@ pub async fn i2c_secondary_task(r: I2CSecondaryResources) {
                         let port_bits = buf[1] & 0x0F; // Mask to lower 4 bits only
                         info!("Setting USB port state to: 0x{:02x}", port_bits);
                         set_usb_port_state(port_bits).await;
+                    }
+                    // LED override
+                    0x60 => {
+                        let expected_len = 1 + LED_NUM_LEDS * 6;
+                        if len != expected_len {
+                            error!(
+                                "Invalid LED override length: expected {}, got {}",
+                                expected_len, len
+                            );
+                            continue;
+                        }
+                        if state_as_u8(&get_state_machine_state().await) != 4 {
+                            // Only in OperationalCoOp
+                            continue;
+                        }
+                        let mut cmds =
+                            [LedOverrideCommand::default(); LED_NUM_LEDS];
+                        for (i, cmd) in cmds.iter_mut().enumerate() {
+                            let base = 1 + i * 6;
+                            *cmd = LedOverrideCommand {
+                                r: buf[base],
+                                g: buf[base + 1],
+                                b: buf[base + 2],
+                                alpha: buf[base + 3],
+                                transition_ms: u16::from_be_bytes([
+                                    buf[base + 4],
+                                    buf[base + 5],
+                                ]),
+                            };
+                        }
+                        LED_BLINKER_EVENT_CHANNEL
+                            .send(LEDBlinkerEvents::SetOverrides(cmds))
+                            .await;
                     }
                     // Initiate shutdown
                     0x30 => {
