@@ -189,8 +189,6 @@ function package:deb:only {
   export FIRMWARE_VERSION=$(cat firmware/VERSION)
   DEB_VERSION=$(echo "$FIRMWARE_VERSION" | sed 's/-\([a-zA-Z]\)/~\1/g')
 
-  envsubst < debian/install.in > debian/install
-
   # Create a new changelog entry
   dch --newversion "$DEB_VERSION" \
       --distribution stable \
