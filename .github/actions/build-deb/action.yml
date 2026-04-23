@@ -63,13 +63,16 @@ runs:
 
     - name: Convert to UF2 format
       run: |
+        # Convert from ELF (not BIN) so picotool preserves correct load addresses.
+        # Firmware loads at 0x10007000, not 0x10000000 — a .bin conversion without
+        # --offset would place it at the wrong address, overwriting the bootloader.
         picotool uf2 convert \
-          target/thumbv6m-none-eabi/release/bootloader.bin \
+          target/thumbv6m-none-eabi/release/bootloader \
           target/thumbv6m-none-eabi/release/bootloader.uf2 \
           --family rp2040
 
         picotool uf2 convert \
-          target/thumbv6m-none-eabi/release/halpi2-rs-firmware.bin \
+          target/thumbv6m-none-eabi/release/halpi2-rs-firmware \
           target/thumbv6m-none-eabi/release/halpi2-rs-firmware.uf2 \
           --family rp2040
       shell: bash
